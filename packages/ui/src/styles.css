@@ -140,40 +140,45 @@ html[data-document-hidden] *::after {
   overflow: hidden;
 }
 
-/* 修复原因：全局 focus 的 outline/shadow 清零会抹掉键盘指示，也会移除菜单/弹窗阴影。
- * 使用主题次级前景色提供共享底线；只匹配 focus-visible，不给普通鼠标按钮焦点额外描边。
- * 放在非 layer 中以覆盖组件的 outline-none，但保留组件自己的 box-shadow 和验证状态。 */
+/* 修复原因：全局非 layer 描边会盖过选项行已有的选中背景并被卡片裁切。
+ * 按钮保留轻量键盘指示；行交互交还原组件的 focus-visible:bg-selected/bg-hover。 */
 :where(
-  button,
-  a[href],
-  input,
-  textarea,
-  select,
-  [role="checkbox"],
-  [role="option"],
-  [role="menuitem"],
-  [tabindex]:not([tabindex="-1"]),
-  [contenteditable="true"]
-):focus-visible {
-  outline: 2px solid var(--color-foreground-subtle);
-  outline-offset: 2px;
+    button,
+    a[href],
+    input,
+    textarea,
+    select,
+    [tabindex]:not([tabindex="-1"]),
+    [contenteditable="true"]
+  ):not(
+    [role="option"],
+    [role="menuitem"],
+    [role="checkbox"],
+    [role="menuitemcheckbox"],
+    [role="menuitemradio"],
+    [role="radio"]
+  ):focus-visible {
+  outline: 2px solid var(--color-input-border-focused);
+  outline-offset: 1px;
 }
 
-/* 修复原因：共享字段已绘制边框，外侧 2px outline 再叠 ring 会形成粗黑双框。
- * 只在原边界内画一条语义细线；组合输入由外壳持有，内部按钮仍保留键盘底线。 */
+/* 字段沿用单一语义边框和聚焦背景，不再叠加 inset outline。组合输入由外壳持有。 */
 [data-slot="input"]:focus-visible,
 [data-slot="textarea"]:focus-visible,
 [data-slot="select-trigger"][data-variant="input"]:focus-visible,
 [data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible) {
-  outline: 1px solid var(--color-foreground-subtle);
-  outline-offset: -1px;
+  outline: none;
+  border-color: var(--color-input-border-focused);
+  background-color: var(--color-input-focused);
 }
 
 [data-slot="input"][aria-invalid="true"]:focus-visible,
 [data-slot="textarea"][aria-invalid="true"]:focus-visible,
 [data-slot="select-trigger"][data-variant="input"][aria-invalid="true"]:focus-visible,
-[data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible):has([aria-invalid="true"]) {
-  outline-color: var(--color-destructive);
+[data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible):has(
+    [aria-invalid="true"]
+  ) {
+  border-color: var(--color-destructive);
 }
 
 [data-slot="input-group"] [data-slot="input-group-control"]:focus-visible {
@@ -214,7 +219,9 @@ html[data-document-hidden] *::after {
   [data-slot="input"][aria-invalid="true"]:focus-visible,
   [data-slot="textarea"][aria-invalid="true"]:focus-visible,
   [data-slot="select-trigger"][data-variant="input"][aria-invalid="true"]:focus-visible,
-  [data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible):has([aria-invalid="true"]) {
+  [data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible):has(
+      [aria-invalid="true"]
+    ) {
     outline-color: Highlight;
   }
 
@@ -593,7 +600,7 @@ html[data-document-hidden] *::after {
   --color-input-focused: var(--color-input);
   --color-input-border: var(--color-border);
   --color-input-border-hover: var(--color-border-hover);
-  --color-input-border-focused: var(--color-border-hover);
+  --color-input-border-focused: var(--color-foreground-subtle);
   --color-terminal-bg: var(--color-background);
   --color-terminal-fg: var(--color-foreground);
   --color-terminal-cursor: #0d0d0d;
@@ -739,7 +746,7 @@ html[data-document-hidden] *::after {
   --color-input-focused: var(--color-input);
   --color-input-border: var(--color-border);
   --color-input-border-hover: var(--color-border-hover);
-  --color-input-border-focused: var(--color-border-hover);
+  --color-input-border-focused: var(--color-foreground-subtle);
   --color-terminal-bg: var(--color-background);
   --color-terminal-fg: var(--color-foreground);
   --color-terminal-cursor: #f8f8f8;
@@ -947,11 +954,7 @@ html[data-document-hidden] *::after {
   .highspeed-animated-gradient-text .animated-gradient-text {
     /* Bug 根因：accelerated turn 只改了工时文案，内部思考和工具仍继承普通扫光色。 */
     --animated-gradient-text-strong: var(--color-icon-purple);
-    --animated-gradient-text-soft: color-mix(
-      in srgb,
-      var(--color-icon-purple) 22%,
-      transparent
-    );
+    --animated-gradient-text-soft: color-mix(in srgb, var(--color-icon-purple) 22%, transparent);
   }
 
   .cua-group-gradient-text {

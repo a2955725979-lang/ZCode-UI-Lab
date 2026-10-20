@@ -24,6 +24,13 @@ describe("protocol presentation surface", () => {
     expect(options.sourceTitle).toBe("electron");
   });
 
+  it("propagates explicit Web presentation without Desktop substitution", () => {
+    expect(
+      applyProtocolPresentationSurface({ runtimeConfig: { mode: "plan" } }, "zcode_web")
+        .runtimeConfig,
+    ).toMatchObject({ mode: "plan", presentationSurface: "zcode_web" });
+  });
+
   it("keeps manual protocol servers on the terminal surface by default", () => {
     const options = applyProtocolPresentationSurface({}, "terminal");
 

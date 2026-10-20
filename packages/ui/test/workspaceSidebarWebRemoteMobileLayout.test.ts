@@ -74,10 +74,6 @@ vi.mock("@/NewTaskButtonGroup.js", () => ({
   NewTaskButtonGroup: () => createElement("div", { "data-testid": "new-task-button-group" }),
 }));
 
-vi.mock("@/TaskSearchDialog.js", () => ({
-  TaskSearchDialog: () => null,
-}));
-
 vi.mock("@/BotsDialog.js", () => ({
   BotsDialog: () => null,
 }));
@@ -100,7 +96,15 @@ vi.mock("@/WorkspacePinnedTasksSection.js", () => ({
 }));
 
 vi.mock("@/WorkspaceTimelineTasksSection.js", () => ({
-  WorkspaceTimelineTasksSection: ({ workspaceTabs }: { workspaceTabs: Array<{ workspacePath: string }> }) => createElement("div", { "data-testid": "timeline-tasks", "data-scopes": workspaceTabs.map((tab) => tab.workspacePath).join(",") }),
+  WorkspaceTimelineTasksSection: ({
+    workspaceTabs,
+  }: {
+    workspaceTabs: Array<{ workspacePath: string }>;
+  }) =>
+    createElement("div", {
+      "data-testid": "timeline-tasks",
+      "data-scopes": workspaceTabs.map((tab) => tab.workspacePath).join(","),
+    }),
 }));
 
 vi.mock("@/WorkspaceGroupedTasksSection.js", () => ({
@@ -263,7 +267,6 @@ describe("WorkspaceSidebar Web remote mobile layout", () => {
   });
 
   it("归档视图打开后将关闭按钮的 tooltip label 切换为 Close", async () => {
-
     render(await createSidebarElement());
     const archiveButton = screen.getByRole("button", {
       name: "workspaceSidebar.toggleArchivedTasks",
@@ -275,7 +278,6 @@ describe("WorkspaceSidebar Web remote mobile layout", () => {
   });
 
   it("places plugins immediately after automations on the desktop home sidebar", async () => {
-
     render(await createSidebarElement({ webRemoteControlWorkspaceSwitcher: undefined }));
     const automationsButton = screen.getByRole("button", {
       name: "workspace.openScheduledSettings",
@@ -302,7 +304,12 @@ describe("WorkspaceSidebar Web remote mobile layout", () => {
   it("Chat includes project scopes, pinned history and an archived actions container", async () => {
     interfaceModeState.value = "office";
     const onCreateConversationTask = vi.fn();
-    render(await createSidebarElement({ webRemoteControlWorkspaceSwitcher: undefined, onCreateConversationTask }));
+    render(
+      await createSidebarElement({
+        webRemoteControlWorkspaceSwitcher: undefined,
+        onCreateConversationTask,
+      }),
+    );
     expect(screen.getByTestId("pinned-tasks")).toBeTruthy();
     expect(screen.getByTestId("timeline-tasks").getAttribute("data-scopes")).toBe("/tmp/project");
     fireEvent.click(screen.getByRole("button", { name: "chatWorkspace.newChat" }));
@@ -312,5 +319,4 @@ describe("WorkspaceSidebar Web remote mobile layout", () => {
     expect(screen.getByTestId("archived-tasks-toolbar-actions")).toBeTruthy();
     expect(screen.getByTestId("pinned-tasks")).toBeTruthy();
   });
-
 });

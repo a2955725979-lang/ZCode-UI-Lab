@@ -190,6 +190,48 @@ describe("V4InteractionDialogs", () => {
     expect(html).not.toContain("chat.elicitation.skipOnce");
   });
 
+  it.each([false, true])(
+    "renders an inline sensitive input in active and inactive panes (active=%s)",
+    (isActive) => {
+      const snapshot = {
+        sessionId: "sensitive-session",
+        pendingInteractions: [
+          {
+            interactionId: "sensitive-input",
+            kind: "userInput",
+            anchorRowId: null,
+            createdAt: 1,
+            payload: {
+              kind: "userInput",
+              prompt: "请输入密码",
+              freeText: true,
+              sensitive: true,
+            },
+          },
+        ],
+      } as ConversationSnapshot;
+      const html = renderToStaticMarkup(
+        createElement(
+          ZCodeIntlProvider,
+          { initialLocale: "zh-CN" },
+          createElement(V4InteractionDialogs, {
+            sessionId: snapshot.sessionId,
+            workspacePath: "/workspace",
+            snapshot,
+            isActive,
+          }),
+        ),
+      );
+      expect(html).toContain('type="password"');
+      expect(html).toContain('aria-label="请输入密码"');
+      expect(html).toContain("rounded-2xl");
+      expect(html).toContain("bg-popover");
+      expect(html).not.toContain("fixed");
+      expect(html).not.toContain("inset-0");
+      expect(html).not.toContain("var(--color");
+    },
+  );
+
   it("renders structured userInput interactions with ElicitationDialog", () => {
     const snapshot = {
       sessionId: "sess-1",
@@ -235,9 +277,10 @@ describe("V4InteractionDialogs", () => {
     );
 
     expect(html).toContain("你想怎么做？");
-    // SSR 只输出待回答入口；聚焦、自动弹一次及选项渲染由真实 DOM 生命周期用例验证。
-    expect(html).toContain('data-elicitation-pending-entry="ask-1"');
-    expect(html).toContain('aria-haspopup="dialog"');
+    expect(html).toContain('data-elicitation-dialog-card="true"');
+    expect(html).toContain('role="option"');
+    expect(html).not.toContain("data-elicitation-pending-entry");
+    expect(html).not.toContain('role="dialog"');
     expect(html).not.toContain(`data-testid="${TID_V4_USER_INPUT_DIALOG}"`);
   });
 });

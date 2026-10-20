@@ -582,8 +582,7 @@ describe("ElicitationDialog request identity", () => {
     });
     act(() => clickFirstOption(container));
 
-    expect(onRespond).not.toHaveBeenCalled();
-    act(() => clickPrimaryAction(container));
+    expect(onRespond).toHaveBeenCalledTimes(1);
     expect(onRespond).toHaveBeenCalledWith("request-1", "accept", {
       answers: {
         请选择保障项: "tests",
@@ -641,8 +640,7 @@ describe("ElicitationDialog request identity", () => {
     });
     act(() => clickFirstOption(container));
 
-    expect(onRespond).not.toHaveBeenCalled();
-    act(() => clickPrimaryAction(container));
+    expect(onRespond).toHaveBeenCalledTimes(1);
     expect(onRespond).toHaveBeenCalledWith("request-restored", "accept", {
       answers: {
         请选择保障项: "tests",

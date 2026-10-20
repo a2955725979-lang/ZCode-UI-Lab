@@ -448,6 +448,7 @@ export function PermissionDialog({
   workflowSessionModel,
   provider,
   isWebRemoteControl = false,
+  autoFocus = true,
   responding = false,
   responseError,
 }: {
@@ -471,6 +472,7 @@ export function PermissionDialog({
   workflowSessionModel?: { providerId: string; modelId: string };
   provider?: ZCodeProvider;
   isWebRemoteControl?: boolean;
+  autoFocus?: boolean;
 }) {
   const { intl } = useZCodeIntl();
   const isMobileTextInputViewport = useIsMobileTextInputViewport();
@@ -569,6 +571,8 @@ export function PermissionDialog({
   }, [request.requestId]);
 
   useEffect(() => {
+    // 后台 pane 的 pending 卡片也会挂载；只抑制自动聚焦，不影响用户主动键盘导航。
+    if (!autoFocus && !rootRef.current?.contains(document.activeElement)) return;
     if (orderedOptions.length === 0) {
       return;
     }
@@ -588,7 +592,7 @@ export function PermissionDialog({
     return () => {
       cancelAnimationFrame(frameId);
     };
-  }, [isFeedbackSelected, orderedOptions.length, request.requestId, selectedIndex]);
+  }, [autoFocus, isFeedbackSelected, orderedOptions.length, request.requestId, selectedIndex]);
 
   const moveSelection = useCallback(
     (direction: 1 | -1) => {

@@ -286,6 +286,20 @@ describe("resolveDefaultZCodeAgentCommand", () => {
   });
 
   it.each(desktopSurfaceArgsCases)(
+    "Web surface 归一化 $name 且不伪装Desktop",
+    ({ input, expected }) => {
+      process.env.ZCODE_AGENT_SERVER_COMMAND = "zcode-agent";
+      process.env.ZCODE_AGENT_SERVER_ARGS_JSON = JSON.stringify(input);
+      const command = resolveDefaultZCodeAgentCommand({
+        workspacePath: "/workspace",
+        workspaceKey: "/workspace",
+        presentationSurface: "web",
+      });
+      expect(command?.args).toEqual(expected.map((arg) => (arg === "desktop" ? "web" : arg)));
+    },
+  );
+
+  it.each(desktopSurfaceArgsCases)(
     "Desktop surface 归一化 $name 时不吞掉无关参数",
     ({ input, expected }) => {
       process.env.ZCODE_AGENT_SERVER_COMMAND = "zcode-agent";

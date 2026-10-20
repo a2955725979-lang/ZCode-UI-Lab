@@ -8,10 +8,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import {
-  ZCODE_OFFICIAL_PLUGIN_MARKETPLACE,
-  ZCODE_PLUGIN_HOST_COMMAND,
-} from "@zcode/contracts";
+import { ZCODE_OFFICIAL_PLUGIN_MARKETPLACE, ZCODE_PLUGIN_HOST_COMMAND } from "@zcode/contracts";
 import {
   ZCODE_CUA_OFFICIAL_PLUGIN_ID,
   ZCODE_CUA_NODE_REPL_HOST_ENV_KEY,
@@ -35,7 +32,12 @@ import {
   parseSlashCommand,
 } from "../src/command-center.js";
 import type { CommandCenterTarget } from "../src/command-center.js";
-import { findDotenv, loadCliDotenv, prepareCliRuntimeEnv, shouldLoadCliDotenvForProtocolServer } from "../src/env.js";
+import {
+  findDotenv,
+  loadCliDotenv,
+  prepareCliRuntimeEnv,
+  shouldLoadCliDotenvForProtocolServer,
+} from "../src/env.js";
 import { runPluginsCommand } from "../src/plugins-command.js";
 import { runPluginHostCommand } from "../src/plugin-host-command.js";
 import { CLI_PROCESS_NAME, setCliProcessTitle } from "../src/process-name.js";
@@ -5380,38 +5382,43 @@ test("defaults headless prompts to yolo mode", async () => {
   assert.equal(ctx.stdout.output(), "hello default mode\n");
 });
 
-test("passes the Desktop presentation surface into headless runtime config", async () => {
-  const ctx = createContext(["--surface", "desktop", "--prompt", "hello desktop"]);
-  const exitCode = await run(ctx, {
-    ...createPromptDeps(),
-    createZCodeApp: (options) => {
-      assert.equal(options?.runtimeConfig?.presentationSurface, "zcode_desktop");
-      assert.equal(options?.sourceTitle, undefined);
-      return {
-        sessionId: "session-test",
-        traceId: "trace-test",
-        runtime: {} as never,
-        submitPrompt: async (prompt: string) => ({
-          events: [],
-          projection: fakeProjection as never,
-          response: prompt,
-          traceId: "trace-test" as never,
-          turnId: "turn-test" as never,
-        }),
-      } as never;
-    },
-  });
+for (const [label, surface] of [
+  ["Desktop", "desktop"],
+  ["Web", "web"],
+] as const) {
+  test(`passes the ${label} presentation surface into headless runtime config`, async () => {
+    const ctx = createContext(["--surface", surface, "--prompt", `hello ${surface}`]);
+    const exitCode = await run(ctx, {
+      ...createPromptDeps(),
+      createZCodeApp: (options) => {
+        assert.equal(options?.runtimeConfig?.presentationSurface, `zcode_${surface}`);
+        assert.equal(options?.sourceTitle, undefined);
+        return {
+          sessionId: "session-test",
+          traceId: "trace-test",
+          runtime: {} as never,
+          submitPrompt: async (prompt: string) => ({
+            events: [],
+            projection: fakeProjection as never,
+            response: prompt,
+            traceId: "trace-test" as never,
+            turnId: "turn-test" as never,
+          }),
+        } as never;
+      },
+    });
 
-  assert.equal(exitCode, 0);
-  assert.equal(ctx.stdout.output(), "hello desktop\n");
-});
+    assert.equal(exitCode, 0);
+    assert.equal(ctx.stdout.output(), `hello ${surface}\n`);
+  });
+}
 
 test("rejects unsupported presentation surfaces", async () => {
-  const ctx = createContext(["--surface", "web", "--prompt", "hello"]);
+  const ctx = createContext(["--surface", "browser", "--prompt", "hello"]);
   const exitCode = await run(ctx, createPromptDeps());
 
   assert.equal(exitCode, 1);
-  assert.match(ctx.stderr.output(), /Unsupported --surface value: web/);
+  assert.match(ctx.stderr.output(), /Unsupported --surface value: browser/);
   assert.equal(ctx.stdout.output(), "");
 });
 
@@ -5425,6 +5432,12 @@ test("rejects the presentation surface option outside supported commands", async
     /--surface can only be used with --prompt, --target, app-server, or agent-server/,
   );
   assert.equal(ctx.stdout.output(), "");
+});
+
+test("rejects the Web surface for TUI", async () => {
+  const ctx = createContext(["tui", "--surface", "web"]);
+  assert.equal(await run(ctx), 1);
+  assert.match(ctx.stderr.output(), /--surface can only be used with/);
 });
 
 test("passes prompt mode override into runtime config", async () => {
@@ -5885,20 +5898,25 @@ test("redirects every protocol console level to stderr and restores the global c
   assert.equal(globalThis.console, originalConsole);
 });
 
-test("passes the Desktop presentation surface to the protocol app server", async () => {
-  const ctx = createContext(["app-server", "--stdio", "--surface", "desktop"]);
-  let called = false;
-  const exitCode = await run(ctx, {
-    runZCodeProtocolAgent: async (options) => {
-      called = true;
-      assert.equal(options?.presentationSurface, "zcode_desktop");
-    },
-  });
+for (const [label, surface] of [
+  ["Desktop", "desktop"],
+  ["Web", "web"],
+] as const) {
+  test(`passes the ${label} presentation surface to the protocol app server`, async () => {
+    const ctx = createContext(["app-server", "--stdio", "--surface", surface]);
+    let called = false;
+    const exitCode = await run(ctx, {
+      runZCodeProtocolAgent: async (options) => {
+        called = true;
+        assert.equal(options?.presentationSurface, `zcode_${surface}`);
+      },
+    });
 
-  assert.equal(exitCode, 0);
-  assert.equal(called, true);
-  assert.equal(ctx.stderr.output(), "");
-});
+    assert.equal(exitCode, 0);
+    assert.equal(called, true);
+    assert.equal(ctx.stderr.output(), "");
+  });
+}
 
 test("rejects force MCS before starting the protocol app server", async () => {
   const ctx = createContext(["app-server", "--stdio", "--force-mcs"]);
@@ -6538,14 +6556,19 @@ test("headless rollout-off diagnostics preserve the runtime feature-disabled rea
   assert.match(ctx.stderr.output(), /Workspace Hooks skipped: workspace_hooks_feature_disabled/);
 });
 
-
 test("isolated development protocol does not load ancestor dotenv credentials", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "zcode-cli-env-isolation-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const nested = join(root, "workspace", "nested");
   await mkdir(nested, { recursive: true });
-  await writeFile(join(root, ".env"), "ANTHROPIC_API_KEY=synthetic-secret\nZCODE_DATA_BASE_DIR=/production\n");
-  const env: Record<string, string | undefined> = { ZCODE_APPLICATION_HOME: root, ZCODE_RUNTIME_ENV: "development" };
+  await writeFile(
+    join(root, ".env"),
+    "ANTHROPIC_API_KEY=synthetic-secret\nZCODE_DATA_BASE_DIR=/production\n",
+  );
+  const env: Record<string, string | undefined> = {
+    ZCODE_APPLICATION_HOME: root,
+    ZCODE_RUNTIME_ENV: "development",
+  };
   assert.equal(shouldLoadCliDotenvForProtocolServer(env), false);
   assert.deepEqual(loadCliDotenv({ cwd: nested, env }), { loaded: false, keys: [] });
   assert.equal(env.ANTHROPIC_API_KEY, undefined);

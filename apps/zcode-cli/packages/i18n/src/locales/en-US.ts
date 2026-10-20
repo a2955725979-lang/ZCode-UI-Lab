@@ -31,7 +31,7 @@ Options:
   -p, --prompt <text>  Run a single prompt without opening the TUI
   --memory-bench   With --prompt, enable automatic Memory extraction and wait before exiting (requires Memory enabled)
   --browser-use <mode> Enable Browser Use backend (supported: headless)
-  --surface <surface>  Presentation surface for headless prompts/app-server: terminal or desktop
+  --surface <surface>  Presentation surface for headless prompts/app-server: terminal, desktop or web
   --browser-executable <path> Chrome/Chromium executable for headless Browser Use
   --attach <path>  Attach a local file to --prompt; repeat for multiple files
   --cwd <path>     Run this command from the given directory

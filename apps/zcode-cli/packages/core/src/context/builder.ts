@@ -22,6 +22,7 @@ import { buildCurrentDateSection } from "./sections/current-date.js";
 import { buildMemorySection } from "./sections/memory.js";
 import { ACTIVE_PROJECT_MEMORY_RETRIEVAL_BRANCH } from "../memory/project-memory-retrieval-branch.js";
 import { buildDesktopContextSection } from "./sections/desktop.js";
+import { FOLLOWUP_SUGGESTIONS_PROMPT } from "./sections/followup-suggestions.js";
 import {
   buildContextManagementSection,
   buildDynamicBehaviorSection,
@@ -131,6 +132,16 @@ export class ContextBuilder {
     if (!hasCustomSystemPrompt) {
       if (!isWorkflowActor && this.config.presentationSurface === "zcode_desktop") {
         sections.push(buildDesktopContextSection(this.config.genUiOutputDirectory));
+      } else if (!isWorkflowActor && this.config.presentationSurface === "zcode_web") {
+        sections.push(
+          createSection({
+            name: "Follow-up Suggestions",
+            source: "followup_suggestions",
+            injectionTarget: "system",
+            cacheHint: "stable",
+            content: FOLLOWUP_SUGGESTIONS_PROMPT,
+          }),
+        );
       }
 
       // behaviour part right after stable sp...

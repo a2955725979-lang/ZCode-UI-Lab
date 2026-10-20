@@ -36,6 +36,25 @@ describe("resolveZCodeAgentPresentationSurface", () => {
     ).toBe("desktop");
   });
 
+  it("只从显式可信Web装配事实推导Web，Desktop事实优先", () => {
+    expect(resolveZCodeAgentPresentationSurface({ standaloneWebHost: true })).toBe("web");
+    expect(
+      resolveZCodeAgentPresentationSurface({
+        standaloneWebHost: true,
+        desktopContextPromptEnabled: false,
+      }),
+    ).toBe("web");
+    expect(
+      resolveZCodeAgentPresentationSurface({
+        standaloneWebHost: true,
+        runtimeSurface: "desktop_local_host",
+      }),
+    ).toBe("desktop");
+    expect(
+      resolveZCodeAgentPresentationSurface({ serviceAuthorityMode: "standalone-server" }),
+    ).toBeUndefined();
+  });
+
   it("不把普通 remote runtime 或无宿主事实的 Server 推导成 Desktop", () => {
     expect(
       resolveZCodeAgentPresentationSurface({

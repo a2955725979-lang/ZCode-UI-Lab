@@ -1,4 +1,3 @@
-import { TaskProgressSummary } from "@/v4/TaskProgressSummary.js";
 import { getLatestFollowupSuggestions } from "@/v4/followupSuggestions.js";
 import { resolveSelectionSideInheritedModel } from "@/lib/selectionSideInheritedModel.js";
 import { useStartPlanRecommendation } from "@/hooks/useStartPlanRecommendation.js";
@@ -379,7 +378,7 @@ export interface SessionPaneProps {
   focused?: boolean;
   /**
    * pane 是否真实可见。分屏的非 focused pane 仍传 true；forceMount 的隐藏侧栏 tab 传 false。
-   * 只影响 foreground UI telemetry，不影响 live subscription 或后台 /event/report。
+   * 门控 foreground UI telemetry 与自动聚焦，不影响 live subscription 或后台 /event/report。
    */
   telemetryVisible?: boolean;
   /** 向右拆分新 draft 窗格（叶子数达上限时宿主不下发）。 */
@@ -563,6 +562,17 @@ interface HighspeedPaneOrigin {
  *   使回调在流式增量期间保持稳定引用，避免把新函数灌进 memo 子组件触发无谓重渲染；
  * - 模型表单的本地输入 state 下沉到对应子组件，输入时不牵动整个 pane。
  */
+interface DispatchCommandOptions {
+  baseRevision?: number;
+  baseLogEpoch?: string;
+  telemetrySeed?: ConversationPromptTelemetrySeed;
+  highspeedCard?: HighspeedCardSnapshot;
+  onEnvelopeCreated?: (envelope: CommandEnvelope) => void;
+  sessionCreateSource?: SessionCreateSource;
+  recentSubmissionOverride?: ComposerSubmissionConfig | null;
+  sessionHistoryModeAtSubmit?: SessionHistoryMode;
+}
+
 export function SessionPane({
   paneId,
   sessionId,
@@ -1209,8 +1219,7 @@ export function SessionPane({
         type: CommandType,
         payload: Record<string, unknown>,
         targetSessionId: string | null,
-        baseRevision?: number,
-        baseLogEpoch?: string,
+        options?: DispatchCommandOptions,
       ) => Promise<CommandAck>)
     | null
   >(null);
@@ -1513,8 +1522,7 @@ export function SessionPane({
               : {}),
           },
           sessionId,
-          snapshot.revision,
-          snapshot.logEpoch,
+          { baseRevision: snapshot.revision, baseLogEpoch: snapshot.logEpoch },
         )
           .then((ack) => {
             if (ack.status !== "accepted" && ack.status !== "duplicate") {
@@ -1780,10 +1788,15 @@ export function SessionPane({
   );
   const codingPlanUpgradeDialog = useOptionalCodingPlanUpgradeDialog();
   const openSettingsTab = useOptionalTabStore((state) => state.openSettingsTab);
-  const historyWorkspacePurpose = useOptionalTabStore((state) =>
-    state.tabs.filter(isWorkspaceTab).find((tab) =>
-      (tab.workspaceIdentity?.trim() || tab.workspacePath) === (workspaceIdentity?.trim() || workspacePath),
-    )?.workspacePurpose,
+  const historyWorkspacePurpose = useOptionalTabStore(
+    (state) =>
+      state.tabs
+        .filter(isWorkspaceTab)
+        .find(
+          (tab) =>
+            (tab.workspaceIdentity?.trim() || tab.workspacePath) ===
+            (workspaceIdentity?.trim() || workspacePath),
+        )?.workspacePurpose,
   );
   const historyInterfaceMode = useZCodeStoreWithDefault((state) => state.interfaceMode, "coding");
   const billingDiscount = useCodingPlanBillingDiscountFromService(
@@ -1899,23 +1912,33 @@ export function SessionPane({
       type: CommandType,
       payload: Record<string, unknown>,
       targetSessionId: string | null,
-      baseRevision?: number,
-      baseLogEpoch?: string,
-      telemetrySeed?: ConversationPromptTelemetrySeed,
-      highspeedCard?: HighspeedCardSnapshot,
-      onEnvelopeCreated?: (envelope: CommandEnvelope) => void,
-      sessionCreateSource?: SessionCreateSource,
-      recentSubmissionOverride?: ComposerSubmissionConfig | null,
-      sessionHistoryModeAtSubmit?: SessionHistoryMode,
+      {
+        baseRevision,
+        baseLogEpoch,
+        telemetrySeed,
+        highspeedCard,
+        onEnvelopeCreated,
+        sessionCreateSource,
+        recentSubmissionOverride,
+        sessionHistoryModeAtSubmit,
+      }: DispatchCommandOptions = {},
     ): Promise<CommandAck> => {
       // 子会话沿用父归属；先于 await 冻结，不能在 ACK 回来后读取当前界面模式。
-      const inheritedHistoryMode = targetSessionId &&
-        (type === "forkAssistant" || type === "createSelectionSideSession")
-        ? getSessionHistoryMode({ workspacePath, workspaceIdentity }, targetSessionId, historyWorkspacePurpose)
-        : undefined;
+      const inheritedHistoryMode =
+        targetSessionId && (type === "forkAssistant" || type === "createSelectionSideSession")
+          ? getSessionHistoryMode(
+              { workspacePath, workspaceIdentity },
+              targetSessionId,
+              historyWorkspacePurpose,
+            )
+          : undefined;
       if (sessionHistoryModeAtSubmit && targetSessionId) {
         // 预热首发先登记真实 ID；ACK 丢失/刷新不应把无项目 Work 回退到 Chat。
-        claimSessionHistoryMode({ workspacePath, workspaceIdentity }, targetSessionId, sessionHistoryModeAtSubmit);
+        claimSessionHistoryMode(
+          { workspacePath, workspaceIdentity },
+          targetSessionId,
+          sessionHistoryModeAtSubmit,
+        );
       }
       const submission = submissionConfigFromCommand(type, payload);
       // 加速轮 payload 的 modelSelection 会被执行材料覆盖为隐藏加速 Provider；Recent 记录的是
@@ -1978,7 +2001,10 @@ export function SessionPane({
         else if (telemetrySeed?.localTtft)
           getLocalTtftObserver()?.ack(telemetrySeed.localTtft, ack.status, ack.ttftExcluded);
       } catch (error) {
-        pendingCommandRegistry.markCreationUncertain(envelope.sessionId, envelope.commandId, { workspacePath, workspaceIdentity });
+        pendingCommandRegistry.markCreationUncertain(envelope.sessionId, envelope.commandId, {
+          workspacePath,
+          workspaceIdentity,
+        });
         if (telemetrySeed?.localTtft)
           getLocalTtftObserver()?.exclude(telemetrySeed.localTtft, "failed");
         if (lease?.store) {
@@ -1988,7 +2014,10 @@ export function SessionPane({
           // provider_not_ready 在 Host getClient 前确定性拒绝，CLI 不可能已经
           // admission。若继续保留 renderer 恢复账本，重连 query 必然得到 unknown；即使
           // unknown 现已静默清账，也不应为确定性拒绝留下无效的恢复记录。
-          pendingCommandRegistry.settle(envelope.sessionId, envelope.commandId, { workspacePath, workspaceIdentity });
+          pendingCommandRegistry.settle(envelope.sessionId, envelope.commandId, {
+            workspacePath,
+            workspaceIdentity,
+          });
         }
         recordV4CommandAck({
           type,
@@ -2010,12 +2039,19 @@ export function SessionPane({
         throw error;
       }
       if (ack.status === "accepted" || ack.status === "duplicate") {
-        const createdSessionId = ack.result?.type === "createSession" ||
-          ack.result?.type === "forkAssistant" || ack.result?.type === "createSelectionSideSession"
-          ? ack.result.sessionId : undefined;
+        const createdSessionId =
+          ack.result?.type === "createSession" ||
+          ack.result?.type === "forkAssistant" ||
+          ack.result?.type === "createSelectionSideSession"
+            ? ack.result.sessionId
+            : undefined;
         const createdHistoryMode = sessionHistoryModeAtSubmit ?? inheritedHistoryMode;
         if (createdSessionId && createdHistoryMode) {
-          claimSessionHistoryMode({ workspacePath, workspaceIdentity }, createdSessionId, createdHistoryMode);
+          claimSessionHistoryMode(
+            { workspacePath, workspaceIdentity },
+            createdSessionId,
+            createdHistoryMode,
+          );
         }
       }
       pendingCommandRegistry.applyAck(envelope, ack, { workspacePath, workspaceIdentity });
@@ -2227,13 +2263,10 @@ export function SessionPane({
       if (!sessionId || !current) {
         throw new Error("Cannot apply file rewind without an active session revision");
       }
-      return dispatchCommand(
-        "applyFileRewind",
-        { target },
-        sessionId,
-        current.revision,
-        current.logEpoch,
-      );
+      return dispatchCommand("applyFileRewind", { target }, sessionId, {
+        baseRevision: current.revision,
+        baseLogEpoch: current.logEpoch,
+      });
     },
     [dispatchCommand, sessionId],
   );
@@ -2539,9 +2572,7 @@ export function SessionPane({
           "createSelectionSideSession",
           { firstInput: { text, ...(modelSelection ? { modelSelection } : {}) } },
           sessionId,
-          undefined,
-          undefined,
-          telemetrySeed,
+          { telemetrySeed: telemetrySeed },
         );
         if (
           (ack.status !== "accepted" && ack.status !== "duplicate") ||
@@ -2960,8 +2991,10 @@ export function SessionPane({
   }, [handleOnlineModelTransition]);
 
   // 原地切 workspace/session 时 acquire effect 尚未更新 lease，旧 A 投影不能被新 B scope 消费。
-  const recoveryProjectionOwned = leaseBinding?.layer === layer &&
-    leaseBinding.workspaceKey === workspaceKey && leaseBinding.sessionId === effectiveSessionId;
+  const recoveryProjectionOwned =
+    leaseBinding?.layer === layer &&
+    leaseBinding.workspaceKey === workspaceKey &&
+    leaseBinding.sessionId === effectiveSessionId;
   const recoverableCommands = usePendingCommandRecovery({
     layer,
     sessionId: effectiveSessionId,
@@ -3018,13 +3051,19 @@ export function SessionPane({
     onSelectionSideChatUnavailable?.();
   }, [onSelectionSideChatUnavailable, selectionSideChat, state.lastError, state.status]);
 
-  const settleCurrentQueueInputs = useCallback((targetSessionId: string) => {
-    const current = snapshotRef.current;
-    if (!current || current.sessionId !== targetSessionId) return;
-    for (const item of current.queue.items) {
-      pendingCommandRegistry.settle(targetSessionId, item.sourceCommandId, { workspacePath, workspaceIdentity });
-    }
-  }, [workspacePath, workspaceIdentity]);
+  const settleCurrentQueueInputs = useCallback(
+    (targetSessionId: string) => {
+      const current = snapshotRef.current;
+      if (!current || current.sessionId !== targetSessionId) return;
+      for (const item of current.queue.items) {
+        pendingCommandRegistry.settle(targetSessionId, item.sourceCommandId, {
+          workspacePath,
+          workspaceIdentity,
+        });
+      }
+    },
+    [workspacePath, workspaceIdentity],
+  );
 
   const dispatchSlashCommand = useCallback(
     async (
@@ -3080,14 +3119,10 @@ export function SessionPane({
         logger.warn(`[v4-pane] slash ${command.kind} 缺少 baseRevision`);
         return true;
       }
-      const ack = await dispatchCommand(
-        type,
-        payload,
-        targetSessionId,
-        withBaseRevision ? baseRevision : undefined,
-        undefined, undefined, undefined, undefined, undefined, undefined,
-        sessionHistoryModeAtSubmit,
-      );
+      const ack = await dispatchCommand(type, payload, targetSessionId, {
+        baseRevision: withBaseRevision ? baseRevision : undefined,
+        sessionHistoryModeAtSubmit: sessionHistoryModeAtSubmit,
+      });
       if (ack.status === "accepted") onAccepted?.(ack.commandId);
       if (ack.reasonCode === "guard.heldQueueConfirmationStale") {
         return "confirmationRequired";
@@ -3264,32 +3299,38 @@ export function SessionPane({
     ) => {
       let onAcceptedSelection: (() => void) | undefined;
       const prepareHighspeedTurn = prepareHighspeedTurnFrom(highspeedOriginAtSend);
-      const dispatchSubmissionCommand = async (...args: Parameters<typeof dispatchCommand>) => {
+      const dispatchSubmissionCommand = async (
+        type: CommandType,
+        payload: Record<string, unknown>,
+        targetSessionId: string | null,
+        dispatchOptions: DispatchCommandOptions = {},
+      ) => {
+        let forwardedPayload = payload;
         if (
-          args[0] === "sendText" &&
-          args[2] &&
+          type === "sendText" &&
+          targetSessionId &&
           baseWorkspaceServices.genUiService &&
-          typeof args[1]?.text === "string"
+          typeof payload.text === "string"
         ) {
           try {
             const context = buildGenUiModelContext(
               await baseWorkspaceServices.genUiService.listState({
                 workspacePath,
                 workspaceIdentity,
-                sessionId: args[2],
+                sessionId: targetSessionId,
               }),
             );
-            if (context) args[1] = { ...args[1], text: `${args[1].text}\n\n${context}` };
+            if (context) forwardedPayload = { ...payload, text: `${payload.text}\n\n${context}` };
           } catch {
-            // 状态是辅助上下文；读取失败不能阻断既有 CommandInbox 输入路径。
             logger.warn("[gen-ui] Widget context unavailable");
           }
         }
-        // 仅草稿首发携带归属上下文；已有会话续聊永远不随显示模式重新分类。
-        if (sessionId === null) args[10] = sessionHistoryModeAtSubmit;
-        const ack = await dispatchCommand(...args);
-        // 在原 accepted 边界写回推荐选择，早于新 Session 的草稿转移；失败不改用户意图。
-        if (ack.status === "accepted" && submissionConfigFromCommand(args[0], args[1]))
+        // 仅草稿首发冻结归属，具名字段不再依赖容易错位的第11个位置参数。
+        const ack = await dispatchCommand(type, forwardedPayload, targetSessionId, {
+          ...dispatchOptions,
+          ...(sessionId === null ? { sessionHistoryModeAtSubmit } : {}),
+        });
+        if (ack.status === "accepted" && submissionConfigFromCommand(type, forwardedPayload))
           onAcceptedSelection?.();
         return ack;
       };
@@ -3524,14 +3565,11 @@ export function SessionPane({
                 ...highspeed.override,
               },
               prewarm.sessionId,
-              undefined,
-              undefined,
-              options?.telemetrySeed,
-              highspeed.acceleratedCard,
-              undefined,
-              undefined,
-              // Recent 记录加速前的 Composer 原始选择，不用被覆盖的 payload Selection。
-              submission,
+              {
+                telemetrySeed: options?.telemetrySeed,
+                highspeedCard: highspeed.acceleratedCard,
+                recentSubmissionOverride: submission,
+              },
             );
             if (ack.status === "accepted") {
               prewarm.promote();
@@ -3607,14 +3645,11 @@ export function SessionPane({
             conversationQuotes: options?.conversationQuotes,
           },
           newSessionId,
-          undefined,
-          undefined,
-          options?.telemetrySeed,
-          highspeed.acceleratedCard,
-          undefined,
-          undefined,
-          // Recent 记录加速前的 Composer 原始选择，不用被覆盖的 payload Selection。
-          submission,
+          {
+            telemetrySeed: options?.telemetrySeed,
+            highspeedCard: highspeed.acceleratedCard,
+            recentSubmissionOverride: submission,
+          },
         );
         if (sendAck.status !== "accepted") {
           throw new Error(sendAck.reasonCode ?? "sendText 被拒绝");
@@ -3648,14 +3683,11 @@ export function SessionPane({
           ...highspeed.override,
         },
         sessionId,
-        undefined,
-        undefined,
-        options?.telemetrySeed,
-        highspeed.acceleratedCard,
-        undefined,
-        undefined,
-        // Recent 记录加速前的 Composer 原始选择，不用被覆盖的 payload Selection。
-        submission,
+        {
+          telemetrySeed: options?.telemetrySeed,
+          highspeedCard: highspeed.acceleratedCard,
+          recentSubmissionOverride: submission,
+        },
       );
       if (ack.reasonCode === "guard.heldQueueConfirmationStale") {
         return "confirmationRequired" as const;
@@ -3705,7 +3737,8 @@ export function SessionPane({
       };
       // 进入配置屏障前冻结 Highspeed 发送起点；屏障与后续 await 期间用户可能切换 Task。
       const highspeedOrigin = captureHighspeedPaneOrigin();
-      const sessionHistoryModeAtSubmit: SessionHistoryMode = historyInterfaceMode === "office" ? "chat" : "work";
+      const sessionHistoryModeAtSubmit: SessionHistoryMode =
+        historyInterfaceMode === "office" ? "chat" : "work";
       // followupMode 仍通过 Session CAS 同步；模型和模式已封装进 Submission，不再
       // 依赖“配置命令先到、sendText 后到”的跨命令时序。
       return configCommandBarrier.enqueue(async () => {
@@ -3817,30 +3850,33 @@ export function SessionPane({
       const current = snapshotRef.current;
       if (!sessionId || current === null) return;
       // 丢失 ACK 不代表未创建；先查询原命令，避免再次点击产生第二个 child。
-      if (pendingCommandRegistry.list(sessionId, { workspacePath, workspaceIdentity }).some(entry => entry.replay.kind === "queryOnly" && !entry.resolvedSessionId)) {
-        toast(intl.formatMessage({id:"taskCollaboration.creation.unknown"}));
+      if (
+        pendingCommandRegistry
+          .list(sessionId, { workspacePath, workspaceIdentity })
+          .some((entry) => entry.replay.kind === "queryOnly" && !entry.resolvedSessionId)
+      ) {
+        toast(intl.formatMessage({ id: "taskCollaboration.creation.unknown" }));
         return;
       }
       // forkAssistant 是 CAS 命令：baseRevision 取当前投影 revision。
-      void dispatchCommand(
-        "forkAssistant",
-        { target },
-        sessionId,
-        current.revision,
-        current.logEpoch,
-      ).then((ack) => {
-        if (ack.status !== "accepted" && ack.status !== "duplicate") {
-          logger.warn(`[v4-pane] fork 被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
-          return;
-        }
-        if (ack.result?.type === "forkAssistant") {
-          // 原地切到 child session（与新建会话同一选择路径）。
-          onSessionCreated?.(ack.result.sessionId);
-        }
-      }).catch((error) => {
-        logger.warn("[v4-pane] fork 结果待查询确认", error);
-        toast(intl.formatMessage({id:"taskCollaboration.creation.unknown"}));
-      });
+      void dispatchCommand("forkAssistant", { target }, sessionId, {
+        baseRevision: current.revision,
+        baseLogEpoch: current.logEpoch,
+      })
+        .then((ack) => {
+          if (ack.status !== "accepted" && ack.status !== "duplicate") {
+            logger.warn(`[v4-pane] fork 被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
+            return;
+          }
+          if (ack.result?.type === "forkAssistant") {
+            // 原地切到 child session（与新建会话同一选择路径）。
+            onSessionCreated?.(ack.result.sessionId);
+          }
+        })
+        .catch((error) => {
+          logger.warn("[v4-pane] fork 结果待查询确认", error);
+          toast(intl.formatMessage({ id: "taskCollaboration.creation.unknown" }));
+        });
     },
     [dispatchCommand, intl, onSessionCreated, sessionId, workspacePath, workspaceIdentity],
   );
@@ -3885,10 +3921,11 @@ export function SessionPane({
           ...highspeed.override,
         },
         sessionId,
-        latest.revision,
-        latest.logEpoch,
-        undefined,
-        highspeed.acceleratedCard,
+        {
+          baseRevision: latest.revision,
+          baseLogEpoch: latest.logEpoch,
+          highspeedCard: highspeed.acceleratedCard,
+        },
       );
       if (ack.status !== "accepted" && ack.status !== "duplicate") {
         logger.warn(`[v4-pane] edit 被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
@@ -3907,13 +3944,10 @@ export function SessionPane({
         throw new Error("retryTurn 缺少当前 session 投影");
       }
       // retryTurn 是 CAS 命令：baseRevision 取当前投影 revision。
-      return dispatchCommand(
-        "retryTurn",
-        { target },
-        sessionId,
-        current.revision,
-        current.logEpoch,
-      );
+      return dispatchCommand("retryTurn", { target }, sessionId, {
+        baseRevision: current.revision,
+        baseLogEpoch: current.logEpoch,
+      });
     },
     [dispatchCommand, sessionId],
   );
@@ -3942,13 +3976,10 @@ export function SessionPane({
     ): Promise<boolean> => {
       const current = snapshotRef.current;
       if (!sessionId || current === null) return false;
-      const ack = await dispatchCommand(
-        "setAssistantFeedback",
-        { target, feedback },
-        sessionId,
-        current.revision,
-        current.logEpoch,
-      );
+      const ack = await dispatchCommand("setAssistantFeedback", { target, feedback }, sessionId, {
+        baseRevision: current.revision,
+        baseLogEpoch: current.logEpoch,
+      });
       const accepted = ack.status === "accepted" || ack.status === "duplicate";
       if (!accepted) {
         logger.warn(`[v4-pane] assistant 反馈被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
@@ -3965,15 +3996,19 @@ export function SessionPane({
       const sourceCommandId = current.queue.items.find(
         (item) => item.queueItemId === queueItemId,
       )?.sourceCommandId;
-      void dispatchCommand("deleteQueueItem", { queueItemId }, sessionId, current.revision).then(
-        (ack) => {
-          if (ack.status !== "accepted" && ack.status !== "noop") {
-            logger.warn(`[v4-pane] deleteQueueItem 被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
-            return;
-          }
-          if (sourceCommandId) pendingCommandRegistry.settle(sessionId, sourceCommandId, { workspacePath, workspaceIdentity });
-        },
-      );
+      void dispatchCommand("deleteQueueItem", { queueItemId }, sessionId, {
+        baseRevision: current.revision,
+      }).then((ack) => {
+        if (ack.status !== "accepted" && ack.status !== "noop") {
+          logger.warn(`[v4-pane] deleteQueueItem 被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
+          return;
+        }
+        if (sourceCommandId)
+          pendingCommandRegistry.settle(sessionId, sourceCommandId, {
+            workspacePath,
+            workspaceIdentity,
+          });
+      });
     },
     [dispatchCommand, sessionId, workspacePath, workspaceIdentity],
   );
@@ -3995,19 +4030,19 @@ export function SessionPane({
       queueEditOperationRef.current = operation;
       setQueueEditOperation(operation);
       try {
-        const ack = await dispatchCommand(
-          "deleteQueueItem",
-          { queueItemId },
-          sessionId,
-          restoreTarget.baseRevision,
-        );
+        const ack = await dispatchCommand("deleteQueueItem", { queueItemId }, sessionId, {
+          baseRevision: restoreTarget.baseRevision,
+        });
         if (!shouldRestoreQueuedComposerFromAck(ack.status)) {
           logger.warn(`[v4-pane] queue 撤回编辑被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
           toast(intl.formatMessage({ id: "chat.queue.editRestoreFailed" }));
           clearQueueEditOperation();
           return;
         }
-        pendingCommandRegistry.settle(sessionId, restoreTarget.sourceCommandId, { workspacePath, workspaceIdentity });
+        pendingCommandRegistry.settle(sessionId, restoreTarget.sourceCommandId, {
+          workspacePath,
+          workspaceIdentity,
+        });
         const currentBinding = composerBindingRef.current;
         if (
           currentBinding.sessionId !== sessionId ||
@@ -4038,7 +4073,15 @@ export function SessionPane({
         clearQueueEditOperation();
       }
     },
-    [clearQueueEditOperation, dispatchCommand, intl, sessionId, workspaceKey, workspacePath, workspaceIdentity],
+    [
+      clearQueueEditOperation,
+      dispatchCommand,
+      intl,
+      sessionId,
+      workspaceKey,
+      workspacePath,
+      workspaceIdentity,
+    ],
   );
 
   const handleSendQueuedNow = useCallback(
@@ -4073,12 +4116,9 @@ export function SessionPane({
           });
           return null;
         }
-        return dispatchCommand(
-          "sendQueuedNow",
-          { queueItemId, ...highspeedOverride },
-          sessionId,
-          latest.revision,
-        );
+        return dispatchCommand("sendQueuedNow", { queueItemId, ...highspeedOverride }, sessionId, {
+          baseRevision: latest.revision,
+        });
       })().then((ack) => {
         if (!ack) return;
         if (ack.status !== "accepted" && ack.status !== "noop") {
@@ -4099,12 +4139,9 @@ export function SessionPane({
     (queueItemId: string, beforeQueueItemId: string | null) => {
       const current = snapshotRef.current;
       if (!sessionId || current === null) return;
-      void dispatchCommand(
-        "reorderQueueItem",
-        { queueItemId, beforeQueueItemId },
-        sessionId,
-        current.revision,
-      ).then((ack) => {
+      void dispatchCommand("reorderQueueItem", { queueItemId, beforeQueueItemId }, sessionId, {
+        baseRevision: current.revision,
+      }).then((ack) => {
         if (ack.status !== "accepted" && ack.status !== "noop") {
           logger.warn(`[v4-pane] reorderQueueItem 被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
         }
@@ -4118,12 +4155,9 @@ export function SessionPane({
     if (!sessionId || !current || current.queue.autoDrain || current.queue.items.length === 0) {
       return;
     }
-    const ack = await dispatchCommand(
-      "setAutoDrain",
-      { autoDrain: true },
-      sessionId,
-      current.revision,
-    );
+    const ack = await dispatchCommand("setAutoDrain", { autoDrain: true }, sessionId, {
+      baseRevision: current.revision,
+    });
     if (ack.status !== "accepted" && ack.status !== "noop") {
       logger.warn(`[v4-pane] 恢复暂停队列被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
     }
@@ -4161,7 +4195,9 @@ export function SessionPane({
       let lastAck: CommandAck | null = null;
       try {
         for (let attempt = 0; attempt < 3; attempt++) {
-          const ack = await dispatchCommand(type, payload, targetSessionId, baseRevision);
+          const ack = await dispatchCommand(type, payload, targetSessionId, {
+            baseRevision: baseRevision,
+          });
           lastAck = ack;
           if (ack.status === "stale") {
             baseRevision = ack.revisionAtDecision;
@@ -4437,21 +4473,25 @@ export function SessionPane({
   const handlePauseGoal = useCallback(() => {
     const current = snapshotRef.current;
     if (!sessionId || !current?.availability.pauseGoal.allowed) return;
-    void dispatchCommand("pauseGoal", {}, sessionId, current.revision).then((ack) => {
-      if (ack.status !== "accepted" && ack.status !== "noop") {
-        logger.warn(`[v4-pane] pauseGoal 被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
-      }
-    });
+    void dispatchCommand("pauseGoal", {}, sessionId, { baseRevision: current.revision }).then(
+      (ack) => {
+        if (ack.status !== "accepted" && ack.status !== "noop") {
+          logger.warn(`[v4-pane] pauseGoal 被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
+        }
+      },
+    );
   }, [dispatchCommand, sessionId]);
 
   const handleResumeGoal = useCallback(() => {
     const current = snapshotRef.current;
     if (!sessionId || !current?.availability.resumeGoal.allowed) return;
-    void dispatchCommand("resumeGoal", {}, sessionId, current.revision).then((ack) => {
-      if (ack.status !== "accepted" && ack.status !== "noop") {
-        logger.warn(`[v4-pane] resumeGoal 被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
-      }
-    });
+    void dispatchCommand("resumeGoal", {}, sessionId, { baseRevision: current.revision }).then(
+      (ack) => {
+        if (ack.status !== "accepted" && ack.status !== "noop") {
+          logger.warn(`[v4-pane] resumeGoal 被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
+        }
+      },
+    );
   }, [dispatchCommand, sessionId]);
 
   // composer parity：Esc → stop（旧 useChatViewEffects「Escape 停止生成」语义保真：
@@ -4779,7 +4819,8 @@ export function SessionPane({
     runningWorkflowCount,
     soleRunningWorkflowRunTarget,
   ]);
-  const presentedSummaryPanelVariantOverride = effectiveSummaryPanelVariantOverride ?? (isOfficeMode ? "mini" : null);
+  const presentedSummaryPanelVariantOverride =
+    effectiveSummaryPanelVariantOverride ?? (isOfficeMode ? "mini" : null);
   const statusPanelVariant = resolveConversationStatusPanelVariant({
     variantOverride: presentedSummaryPanelVariantOverride,
   });
@@ -5191,29 +5232,70 @@ export function SessionPane({
 
   const historyModeUnpersisted = useSyncExternalStore(
     subscribeSessionHistoryModes,
-    useCallback(() => hasUnpersistedSessionHistoryMode({ workspacePath, workspaceIdentity }, sessionId), [sessionId, workspaceIdentity, workspacePath]),
+    useCallback(
+      () => hasUnpersistedSessionHistoryMode({ workspacePath, workspaceIdentity }, sessionId),
+      [sessionId, workspaceIdentity, workspacePath],
+    ),
     () => false,
   );
   const retryHistoryModePersistence = useCallback(() => {
     if (!sessionId) return;
     try {
-      setSessionHistoryMode({workspacePath, workspaceIdentity}, sessionId,
-        getSessionHistoryMode({workspacePath, workspaceIdentity}, sessionId, historyWorkspacePurpose));
-    } catch {toast(intl.formatMessage({id:"taskCollaboration.history.unsaved"}));}
-  }, [historyWorkspacePurpose, intl, sessionId, workspaceIdentity, workspacePath]);
+      setSessionHistoryMode(
+        { workspacePath, workspaceIdentity },
+        sessionId,
+        getSessionHistoryMode(
+          { workspacePath, workspaceIdentity },
+          sessionId,
+          historyWorkspacePurpose,
+        ),
+      );
+    } catch {
+      toast(intl.formatMessage({ id: "taskCollaboration.history.unsaved" }), {
+        variant: "warning",
+        dedupeKey: `history-classification:${JSON.stringify([workspaceKey, sessionId])}`,
+        actionLabel: intl.formatMessage({ id: "taskCollaboration.history.retry" }),
+        onAction: retryHistoryModePersistence,
+      });
+    }
+  }, [historyWorkspacePurpose, intl, sessionId, workspaceIdentity, workspaceKey, workspacePath]);
+  const notifiedHistoryClaimRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!historyModeUnpersisted || !sessionId) {
+      notifiedHistoryClaimRef.current = null;
+      return;
+    }
+    const key = JSON.stringify([workspaceKey, sessionId]);
+    if (notifiedHistoryClaimRef.current === key) return;
+    notifiedHistoryClaimRef.current = key;
+    toast(intl.formatMessage({ id: "taskCollaboration.history.unsaved" }), {
+      variant: "warning",
+      dedupeKey: `history-classification:${key}`,
+      actionLabel: intl.formatMessage({ id: "taskCollaboration.history.retry" }),
+      onAction: retryHistoryModePersistence,
+    });
+  }, [historyModeUnpersisted, intl, retryHistoryModePersistence, sessionId, workspaceKey]);
   const recoverableCommand = recoverableCommands[0] ?? null;
   const refreshPendingCreation = useCallback(() => {
     if (!recoverableCommand) return;
     useZCodeSessionStore.getState().bumpTaskListVersion(workspacePath, workspaceIdentity);
-    void pendingCommandRegistry.reconcileSession(recoverableCommand.sessionId, params => layer.queryCommands(params), { workspacePath, workspaceIdentity }).catch(error => {
-      logger.warn("[v4-pending-command] 查询创建结果失败",error);
-      toast(intl.formatMessage({id:"taskCollaboration.creation.queryFailed"}));
-    });
+    void pendingCommandRegistry
+      .reconcileSession(recoverableCommand.sessionId, (params) => layer.queryCommands(params), {
+        workspacePath,
+        workspaceIdentity,
+      })
+      .catch((error) => {
+        logger.warn("[v4-pending-command] 查询创建结果失败", error);
+        toast(intl.formatMessage({ id: "taskCollaboration.creation.queryFailed" }));
+      });
   }, [intl, layer, recoverableCommand, workspaceIdentity, workspacePath]);
   const openRecoveredCreation = useCallback(() => {
     if (!recoverableCommand?.resolvedSessionId) return;
     const child = recoverableCommand.resolvedSessionId;
-    pendingCommandRegistry.settle(recoverableCommand.sessionId, recoverableCommand.commandId, { workspacePath, workspaceIdentity });
+    pendingCommandRegistry.settle(recoverableCommand.sessionId, recoverableCommand.commandId, {
+      workspacePath,
+      workspaceIdentity,
+    });
     useZCodeSessionStore.getState().bumpTaskListVersion(workspacePath, workspaceIdentity);
     onSessionCreated?.(child);
   }, [onSessionCreated, recoverableCommand, workspaceIdentity, workspacePath]);
@@ -5227,21 +5309,30 @@ export function SessionPane({
   }, [recoverableCommand, workspacePath, workspaceIdentity]);
   const handleResendPendingCommand = useCallback(() => {
     if (!recoverableCommand) return;
-    const replay = pendingCommandRegistry.consumeReplay({
-      sessionId: recoverableCommand.sessionId,
-      commandId: recoverableCommand.commandId,
-    }, { workspacePath, workspaceIdentity });
+    const replay = pendingCommandRegistry.consumeReplay(
+      {
+        sessionId: recoverableCommand.sessionId,
+        commandId: recoverableCommand.commandId,
+      },
+      { workspacePath, workspaceIdentity },
+    );
     if (!replay) return;
     const savedHistoryMode = replay.clientContext?.sessionHistoryMode;
-    const recoveryHistoryMode = savedHistoryMode === "chat" || savedHistoryMode === "work"
-      ? savedHistoryMode
-      : replay.type === "createSession"
-        ? getSessionHistoryMode({ workspacePath, workspaceIdentity }, null, historyWorkspacePurpose)
-        : undefined;
-    void dispatchCommand(
-      replay.type, replay.payload, replay.sessionId, replay.baseRevision,
-      undefined, undefined, undefined, undefined, undefined, undefined, recoveryHistoryMode,
-    ).then((ack) => {
+    const recoveryHistoryMode =
+      savedHistoryMode === "chat" || savedHistoryMode === "work"
+        ? savedHistoryMode
+        : replay.type === "createSession"
+          ? getSessionHistoryMode(
+              { workspacePath, workspaceIdentity },
+              null,
+              historyWorkspacePurpose,
+            )
+          : undefined;
+    void dispatchCommand(replay.type, replay.payload, replay.sessionId, {
+      baseRevision: replay.baseRevision,
+      sessionHistoryModeAtSubmit: recoveryHistoryMode,
+    })
+      .then((ack) => {
         if (
           replay.type === "createSession" &&
           (ack.status === "accepted" || ack.status === "duplicate") &&
@@ -5270,18 +5361,30 @@ export function SessionPane({
         // 新 command 已先写入 registry；本次 transport 失败仍可在下次连接继续对账。
         logger.warn("[v4-pending-command] 用户确认重发失败", error);
       });
-  }, [dispatchCommand, handleDraftSessionCreated, historyWorkspacePurpose, recoverableCommand, workspaceIdentity, workspaceKey, workspacePath]);
+  }, [
+    dispatchCommand,
+    handleDraftSessionCreated,
+    historyWorkspacePurpose,
+    recoverableCommand,
+    workspaceIdentity,
+    workspaceKey,
+    workspacePath,
+  ]);
 
   // subagent 右侧 child tab 是观察视图；复用普通 SessionPane 时
   // 若仍创建 composer，会让用户误以为可以直接向 child session 继续输入。
-  const completedFollowupSuggestions = useMemo(() => getLatestFollowupSuggestions(snapshot), [snapshot]);
+  const completedFollowupSuggestions = useMemo(
+    () => getLatestFollowupSuggestions(snapshot),
+    [snapshot],
+  );
+  const interactionFocusBoundaryRef = useRef<HTMLDivElement | null>(null);
   const composerNode = readOnly ? null : (
     <ConversationComposer
       key="conversation-composer"
       // Snapshot 仍服务用量、路由与运行态；工具栏的 mode/model 只读下方 Composer Draft。
       snapshot={snapshot}
       workMode={!isOfficeMode}
-      workTaskStartConfirmationEnabled={sharedSettings?.workTaskStartConfirmationEnabled !== false}
+      workTaskBriefEnabled={sharedSettings?.workTaskStartConfirmationEnabled !== false}
       followupSuggestionsEnabled={sharedSettings?.followupSuggestionsEnabled !== false}
       followupSuggestions={completedFollowupSuggestions}
       sessionId={sessionId}
@@ -5300,10 +5403,11 @@ export function SessionPane({
       contextHeader={isDraft ? draftComposerHeader : undefined}
       centered={isDraft}
       blockingRequestId={blockingInteractionId}
+      interactionFocusBoundaryRef={interactionFocusBoundaryRef}
       listenAddToChatEvents={focused}
       externalTextInsertRequest={focused && sessionId === null ? composerTextInsertRequest : null}
       onExternalTextInsertApplied={handleExternalTextInsertApplied}
-      autoFocusEnabled={focused}
+      autoFocusEnabled={focused && telemetryVisible}
       disabled={
         connecting ||
         draftRuntimeRebuilding ||
@@ -5376,6 +5480,10 @@ export function SessionPane({
       ) : null}
     </>
   );
+  const showQuotaBanner =
+    quotaBanner.state.visible &&
+    !quotaBanner.dismissed &&
+    (!projectedComposerError || quotaBanner.takesOverError || quotaBanner.state.blocksSubmit);
   const conversationBottomDockContent = readOnly ? null : shareActive && sessionId ? (
     shareInSelectionStage ? (
       <ConversationShareSelectionDock
@@ -5433,9 +5541,7 @@ export function SessionPane({
     )
   ) : (
     <>
-      {quotaBanner.state.visible &&
-      !quotaBanner.dismissed &&
-      (!projectedComposerError || quotaBanner.takesOverError || quotaBanner.state.blocksSubmit) ? (
+      {showQuotaBanner ? (
         <ConversationQuotaBanner
           state={quotaBanner.state}
           onShown={quotaBanner.markShown}
@@ -5450,11 +5556,7 @@ export function SessionPane({
           onDismiss={quotaBanner.dismiss}
         />
       ) : null}
-      {historyModeUnpersisted ? <div role="status" data-testid="session-history-unsaved" className="mb-2 flex items-center gap-2 rounded-xl border border-border bg-surface px-3 py-2 text-ui-sm">
-        <span className="min-w-0 flex-1">{intl.formatMessage({id:"taskCollaboration.history.unsaved"})}</span>
-        <button type="button" onClick={retryHistoryModePersistence} className="shrink-0 rounded-md px-2 py-1 hover:bg-hover">{intl.formatMessage({id:"taskCollaboration.history.retry"})}</button>
-      </div> : null}
-      {recoverableCommand ? (
+      {!showQuotaBanner && recoverableCommand ? (
         <PendingCommandRecoveryBanner
           entry={recoverableCommand}
           onResend={
@@ -5465,7 +5567,7 @@ export function SessionPane({
           onDismiss={handleDismissPendingRecovery}
         />
       ) : null}
-      {sessionId && snapshot?.workspaceHookAdmission ? (
+      {!showQuotaBanner && !recoverableCommand && sessionId && snapshot?.workspaceHookAdmission ? (
         <WorkspaceHookPendingBanner
           sessionId={sessionId}
           workspacePath={workspacePath}
@@ -5490,24 +5592,22 @@ export function SessionPane({
       {/* Bugfix: v4 权限/问答等待态只是 runtime 的阻塞交互，必须和 composer
           共享 timeline bottom dock；渲染在 SessionPane 外层会脱离主列宽度并挤占下半屏。 */}
       {sessionId && snapshot ? (
-        <V4InteractionDialogs
-          key="conversation-interactions"
-          isActive={focused}
-          sessionId={sessionId}
-          workspacePath={workspacePath}
-          workspaceIdentity={workspaceIdentity}
-          remoteSessionId={remoteSessionId ?? undefined}
-          isWebRemoteControl={compactForRemoteControl}
-          provider={provider}
-          snapshot={snapshot}
-          onPlanInteractionAccepted={
-            compactForRemoteControl ? handleMobilePlanInteractionAccepted : undefined
-          }
-        />
-      ) : null}
-      {/* Chat 保留独立的生成、停止、错误和阻塞交互反馈；工程步骤摘要仅在 Work 展示。 */}
-      {sessionId && snapshot && !isOfficeMode ? (
-        <TaskProgressSummary snapshot={snapshot} defaultExpanded />
+        <div ref={interactionFocusBoundaryRef} className="contents">
+          <V4InteractionDialogs
+            key="conversation-interactions"
+            isActive={focused && telemetryVisible}
+            sessionId={sessionId}
+            workspacePath={workspacePath}
+            workspaceIdentity={workspaceIdentity}
+            remoteSessionId={remoteSessionId ?? undefined}
+            isWebRemoteControl={compactForRemoteControl}
+            provider={provider}
+            snapshot={snapshot}
+            onPlanInteractionAccepted={
+              compactForRemoteControl ? handleMobilePlanInteractionAccepted : undefined
+            }
+          />
+        </div>
       ) : null}
       {isOfficeMode ? draftSuggestionsNode : null}
       {composerNode}

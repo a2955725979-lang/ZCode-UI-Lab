@@ -27,7 +27,7 @@ const {
   dialogOpenStates,
   inputClear,
   inputSetText,
-  workTaskStartProps,
+  completionMenuOpen,
   followupPreviewProps,
   followupPreviewMountStates,
 } = vi.hoisted(() => ({
@@ -40,7 +40,7 @@ const {
   dialogOpenStates: [] as boolean[],
   inputClear: vi.fn(),
   inputSetText: vi.fn(),
-  workTaskStartProps: [] as Array<Record<string, unknown>>,
+  completionMenuOpen: { value: false },
   followupPreviewProps: [] as Array<Record<string, unknown>>,
   followupPreviewMountStates: [] as boolean[],
 }));
@@ -63,16 +63,6 @@ function expectedTelemetrySendOptions() {
   });
 }
 
-vi.mock("@/v4/composer/WorkTaskStartDialog.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/v4/composer/WorkTaskStartDialog.js")>();
-  return {
-    ...actual,
-    WorkTaskStartDialog: (props: Record<string, unknown>) => {
-      workTaskStartProps.push(props);
-      return null;
-    },
-  };
-});
 vi.mock("@/v4/composer/FollowupPreview.js", async () => {
   const React = await import("react");
   return {
@@ -126,6 +116,7 @@ vi.mock("@/prompt-editor/ChatPromptEditor.js", async () => {
       if (inputApiRef) {
         inputApiRef.current = {
           clear: inputClear,
+          isCompletionMenuOpen: () => completionMenuOpen.value,
           focus: vi.fn(),
           getEditorState: () => null,
           getMarkdown: () => "",
@@ -422,7 +413,6 @@ afterEach(() => {
   inputSetText.mockClear();
   vi.unstubAllGlobals();
   dialogOpenStates.length = 0;
-  workTaskStartProps.length = 0;
   followupPreviewProps.length = 0;
   followupPreviewMountStates.length = 0;
   delete (globalThis as { document?: unknown }).document;
@@ -595,7 +585,7 @@ describe("ConversationComposer prompt history", () => {
     },
   );
 
-  it("Work 首发只有显式确认才进入原提交链，双确认只发送一次", async () => {
+  it("Work 首发直接发送一次，并按界面语言附加非空简报", async () => {
     const root = createRoot(installMinimalDom());
     const onSendText = vi.fn(async () => {});
     const taskStart = { outcome: "可复核", deliverable: "Word", constraints: "保留原件" };
@@ -615,24 +605,15 @@ describe("ConversationComposer prompt history", () => {
       ),
     );
     await act(async () => {
-      (chatPromptEditorProps.at(-1)!.onSubmit as (text: string) => boolean)("原始目标");
-    });
-    expect(workTaskStartProps.at(-1)).toMatchObject({
-      open: true,
-      goal: "原始目标",
-      fields: taskStart,
-    });
-    expect(onSendText).not.toHaveBeenCalled();
-    expect(attachmentState.prepareForSend).not.toHaveBeenCalled();
-    const confirm = workTaskStartProps.at(-1)!.onConfirm as () => void;
-    await act(async () => {
-      confirm();
-      confirm();
+      const send = chatPromptEditorProps.at(-1)!.onSubmit as (text: string) => boolean;
+      send("原始目标");
+      send("原始目标");
       await flushAsyncWork();
     });
+    expect(dialogOpenStates.some(Boolean)).toBe(false);
     expect(onSendText).toHaveBeenCalledTimes(1);
     expect(onSendText.mock.calls[0]![0]).toBe(
-      "原始目标\n\nExpected outcome: 可复核\nDeliverable: Word\nConstraints: 保留原件",
+      "原始目标\n\n预期结果：可复核\n交付形式：Word\n约束与边界：保留原件",
     );
     expect(
       readV4ComposerDraft("/workspace", undefined, V4_DRAFT_SCOPE_ROOT)?.taskStart,
@@ -640,7 +621,7 @@ describe("ConversationComposer prompt history", () => {
     await act(async () => root.unmount());
   });
 
-  it("Work 取消保留草稿及补充项，改变分类后旧确认失效", async () => {
+  it("切换到Chat保留简报草稿，但Chat发送不附加Work简报", async () => {
     const root = createRoot(installMinimalDom());
     const onSendText = vi.fn(async () => {});
     const draft = {
@@ -663,24 +644,15 @@ describe("ConversationComposer prompt history", () => {
         ),
       );
     act(() => render(true));
-    await act(async () => {
-      (chatPromptEditorProps.at(-1)!.onSubmit as (text: string) => boolean)("目标");
-    });
-    await act(async () => {
-      (workTaskStartProps.at(-1)!.onCancel as () => void)();
-    });
-    expect(onSendText).not.toHaveBeenCalled();
     expect(inputClear).not.toHaveBeenCalled();
+    act(() => render(false));
+    expect(onSendText).not.toHaveBeenCalled();
     await act(async () => {
       (chatPromptEditorProps.at(-1)!.onSubmit as (text: string) => boolean)("目标");
-    });
-    const staleConfirm = workTaskStartProps.at(-1)!.onConfirm as () => void;
-    act(() => render(false));
-    await act(async () => {
-      staleConfirm();
       await flushAsyncWork();
     });
-    expect(onSendText).not.toHaveBeenCalled();
+    expect(onSendText).toHaveBeenCalledOnce();
+    expect(onSendText.mock.calls[0]![0]).toBe("目标");
     await act(async () => root.unmount());
   });
 
@@ -723,7 +695,7 @@ describe("ConversationComposer prompt history", () => {
       (preview.onAccept as (value: typeof suggestion) => void)(suggestion);
     });
     expect(inputSetText).not.toHaveBeenCalled();
-    expect(followupPreviewProps.at(-1)?.canAccept).toBe(false);
+    expect(followupPreviewMountStates.at(-1)).toBe(false);
     await act(async () => root.unmount());
   });
 
@@ -746,7 +718,7 @@ describe("ConversationComposer prompt history", () => {
     },
   );
 
-  it("启动补充字段的输入不会被当作正文编辑使确认失效", async () => {
+  it("新工作首发不拦截；简报字段不会被当作正文编辑", async () => {
     const container = installMinimalDom();
     const root = createRoot(container);
     const onSendText = vi.fn(async () => {});
@@ -772,7 +744,6 @@ describe("ConversationComposer prompt history", () => {
       target: { isContentEditable: false },
     });
     await act(async () => {
-      (workTaskStartProps.at(-1)!.onConfirm as () => void)();
       await flushAsyncWork();
     });
     expect(onSendText).toHaveBeenCalledTimes(1);
@@ -810,35 +781,39 @@ describe("ConversationComposer prompt history", () => {
   });
 
   it.each([
+    { sessionId: null, workMode: true, enabled: true },
     { sessionId: "existing", workMode: true, enabled: true },
     { sessionId: null, workMode: false, enabled: true },
     { sessionId: null, workMode: true, enabled: false },
-  ])("已有会话、Chat 或关闭确认时直接沿原发送入口 %#", async ({ sessionId, workMode, enabled }) => {
-    const root = createRoot(installMinimalDom());
-    const onSendText = vi.fn(async () => {});
-    act(() =>
-      root.render(
-        renderComposerElement(
-          onSendText,
-          sessionId,
-          undefined,
-          null,
-          undefined,
-          undefined,
-          undefined,
-          true,
-          { workMode, workTaskStartConfirmationEnabled: enabled },
+  ])(
+    "新工作、已有会话、Chat 或关闭简报时都直接沿原发送入口 %#",
+    async ({ sessionId, workMode, enabled }) => {
+      const root = createRoot(installMinimalDom());
+      const onSendText = vi.fn(async () => {});
+      act(() =>
+        root.render(
+          renderComposerElement(
+            onSendText,
+            sessionId,
+            undefined,
+            null,
+            undefined,
+            undefined,
+            undefined,
+            true,
+            { workMode, workTaskBriefEnabled: enabled },
+          ),
         ),
-      ),
-    );
-    await act(async () => {
-      (chatPromptEditorProps.at(-1)!.onSubmit as (text: string) => boolean)("正文");
-      await flushAsyncWork();
-    });
-    expect(onSendText).toHaveBeenCalledTimes(1);
-    expect(workTaskStartProps.some((props) => props.open)).toBe(false);
-    await act(async () => root.unmount());
-  });
+      );
+      await act(async () => {
+        (chatPromptEditorProps.at(-1)!.onSubmit as (text: string) => boolean)("正文");
+        await flushAsyncWork();
+      });
+      expect(onSendText).toHaveBeenCalledTimes(1);
+      expect(dialogOpenStates.some(Boolean)).toBe(false);
+      await act(async () => root.unmount());
+    },
+  );
 
   it("Tab 只在聚焦可编辑空输入接受建议，IME和菜单保留按键", async () => {
     const container = installMinimalDom();
@@ -878,10 +853,11 @@ describe("ConversationComposer prompt history", () => {
     props.onKeyDown!(event);
     expect(event.preventDefault).not.toHaveBeenCalled();
     props.onCompositionEndCapture!({ target });
-    Object.assign(document, { querySelector: () => ({}) });
+    completionMenuOpen.value = true;
     props.onKeyDown!(event);
     expect(event.preventDefault).not.toHaveBeenCalled();
-    Object.assign(document, { querySelector: () => null, activeElement: {} });
+    completionMenuOpen.value = false;
+    Object.assign(document, { activeElement: {} });
     props.onKeyDown!(event);
     expect(event.preventDefault).not.toHaveBeenCalled();
     Object.assign(document, { activeElement: target });
@@ -1001,7 +977,7 @@ describe("ConversationComposer prompt history", () => {
     expect(followupPreviewMountStates).toEqual([true, false, true, false]);
   });
 
-  it("首发失败后同一意图显式重试复用启动确认，新正文使确认失效", async () => {
+  it("首发失败后保留草稿，重试和修改正文都直接发送", async () => {
     const root = createRoot(installMinimalDom());
     const onSendText = vi.fn(async () => {
       throw new Error("ACK timeout");
@@ -1025,25 +1001,26 @@ describe("ConversationComposer prompt history", () => {
       (chatPromptEditorProps.at(-1)!.onSubmit as (text: string) => boolean)("目标");
     });
     await act(async () => {
-      (workTaskStartProps.at(-1)!.onConfirm as () => void)();
       await flushAsyncWork();
     });
     expect(onSendText).toHaveBeenCalledTimes(1);
-    const openCount = workTaskStartProps.filter((props) => props.open).length;
     await act(async () => {
       (chatPromptEditorProps.at(-1)!.onSubmit as (text: string) => boolean)("目标");
       await flushAsyncWork();
     });
     expect(onSendText).toHaveBeenCalledTimes(2);
-    expect(workTaskStartProps.filter((props) => props.open)).toHaveLength(openCount);
+    expect(dialogOpenStates.some(Boolean)).toBe(false);
     await act(async () => {
       (chatPromptEditorProps.at(-1)!.onChange as (text: string) => void)("修改后的目标");
     });
     await act(async () => {
       (chatPromptEditorProps.at(-1)!.onSubmit as (text: string) => boolean)("修改后的目标");
     });
-    expect(onSendText).toHaveBeenCalledTimes(2);
-    expect(workTaskStartProps.at(-1)?.open).toBe(true);
+    await act(async () => {
+      await flushAsyncWork();
+    });
+    expect(onSendText).toHaveBeenCalledTimes(3);
+    expect(dialogOpenStates.some(Boolean)).toBe(false);
     await act(async () => root.unmount());
   });
 

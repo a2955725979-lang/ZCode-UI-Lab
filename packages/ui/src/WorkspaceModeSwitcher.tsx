@@ -16,7 +16,7 @@ export function WorkspaceModeSwitcher({ className }: { className?: string }) {
       aria-label={intl.formatMessage({ id: "settings.interfaceMode" })}
       data-workspace-mode-switcher="true"
       className={cn(
-        "flex items-center gap-1 rounded-xl bg-surface p-1 [app-region:no-drag]",
+        "flex h-8 items-center gap-1 rounded-lg bg-surface p-1 [app-region:no-drag]",
         className,
       )}
     >

@@ -5,8 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { IBroadcastService } from "@zcode/services";
 import { createZCodeStore } from "@/store/index.js";
 import { StoreContext } from "@/store/StoreProvider.js";
-import { setSessionHistoryMode } from "@/store/sessionHistoryModeStore.js";
-import { useSessionHistoryMode, useSessionHistoryModePredicate } from "@/hooks/useSessionHistoryMode.js";
+import { setSessionHistoryMode, setSessionHistoryFilter } from "@/store/sessionHistoryModeStore.js";
+import {
+  useSessionHistoryMode,
+  useSessionHistoryModePredicate,
+} from "@/hooks/useSessionHistoryMode.js";
 
 const scope = { workspacePath: "/same", workspacePurpose: "conversation" as const };
 const task = { ...scope, taskId: "session" };
@@ -23,6 +26,22 @@ beforeEach(() => localStorage.clear());
 afterEach(cleanup);
 
 describe("session history mode hooks", () => {
+  it("applies independent filters while preserving mode-default behavior", () => {
+    const store = createZCodeStore(broadcastService);
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(StoreContext.Provider, { value: store }, children);
+    const { result } = renderHook(() => useSessionHistoryModePredicate([scope]), { wrapper });
+    expect(result.current(task)).toBe(false);
+    act(() => setSessionHistoryFilter("work", "all"));
+    expect(result.current(task)).toBe(true);
+    act(() => store.getState().setInterfaceMode("office"));
+    expect(result.current(task)).toBe(true);
+    act(() => setSessionHistoryFilter("chat", "work"));
+    expect(result.current(task)).toBe(false);
+    act(() => store.getState().setInterfaceMode("coding"));
+    expect(result.current(task)).toBe(true);
+  });
+
   it("uses coding without a provider and reacts to manual moves", () => {
     const { result } = renderHook(() => useSessionHistoryModePredicate([scope]));
     expect(result.current(task)).toBe(false);
@@ -34,10 +53,16 @@ describe("session history mode hooks", () => {
 
   it("updates for interface mode and scope purpose without moving the session", () => {
     const store = createZCodeStore(broadcastService);
-    const wrapper = ({ children }: { children: ReactNode }) => createElement(StoreContext.Provider, { value: store }, children);
-    const { result, rerender } = renderHook(({ purpose }: { purpose: "conversation" | "project" }) => useSessionHistoryModePredicate([{ ...scope, workspacePurpose: purpose }]), {
-      initialProps: { purpose: "conversation" }, wrapper,
-    });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(StoreContext.Provider, { value: store }, children);
+    const { result, rerender } = renderHook(
+      ({ purpose }: { purpose: "conversation" | "project" }) =>
+        useSessionHistoryModePredicate([{ ...scope, workspacePurpose: purpose }]),
+      {
+        initialProps: { purpose: "conversation" },
+        wrapper,
+      },
+    );
     const before = result.current;
     rerender({ purpose: "conversation" });
     expect(result.current).toBe(before);

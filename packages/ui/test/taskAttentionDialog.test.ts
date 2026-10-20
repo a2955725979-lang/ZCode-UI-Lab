@@ -9,6 +9,8 @@ import type {
   WindowHostControllerTaskListItem,
 } from "@zcode/services";
 import { TaskAttentionDialog } from "@/TaskAttentionDialog.js";
+import { useTaskQueryCacheStore } from "@/store/taskQueryCacheStore.js";
+import { attachTaskListRowActivity } from "@/v4/taskListRowActivity.js";
 import { ServiceProvider } from "@/hooks/useServices.js";
 import type { WorkspaceTabState } from "@/store/tabStore.js";
 import {
@@ -28,6 +30,7 @@ vi.mock("@/i18n/IntlProvider.js", () => ({
 
 afterEach(() => {
   cleanup();
+  useTaskQueryCacheStore.getState().clearAll();
   const pending = getTaskInteractionOpenRequest();
   if (pending) consumeTaskInteractionOpenRequest(pending);
 });
@@ -114,8 +117,17 @@ function items(): WindowHostControllerTaskListItem[] {
 }
 function setup(initial = items()) {
   const frames = new Emitter<WindowHostControllerFrame>();
-  let source = initial;
-  const listTaskList = vi.fn(async () => ({ items: source, total: source.length, hasMore: false }));
+  useTaskQueryCacheStore.getState().clearAll();
+  for (const task of initial) {
+    useTaskQueryCacheStore
+      .getState()
+      .upsertTaskMeta(task.activity ? attachTaskListRowActivity(task, task.activity) : task);
+  }
+  const listTaskList = vi.fn(async () => ({
+    items: initial,
+    total: initial.length,
+    hasMore: false,
+  }));
   const services = {
     windowControllerService: {
       listTaskList,
@@ -138,14 +150,12 @@ function setup(initial = items()) {
     ...view,
     listTaskList,
     onSelectTask,
-    setSource: (next: WindowHostControllerTaskListItem[]) => {
-      source = next;
-    },
+    frames,
   };
 }
 
 describe("TaskAttentionDialog", () => {
-  it.each(["Escape", "Close"])(
+  it.each(["Escape", "Trigger"])(
     "restores keyboard focus to the real trigger after %s",
     async (closeAction) => {
       const view = setup();
@@ -159,7 +169,7 @@ describe("TaskAttentionDialog", () => {
       if (closeAction === "Escape") {
         fireEvent.keyDown(document.activeElement!, { key: "Escape", code: "Escape" });
       } else {
-        fireEvent.click(screen.getByRole("button", { name: "Close" }));
+        fireEvent.click(trigger);
       }
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
       await waitFor(() => expect(document.activeElement).toBe(trigger));
@@ -190,21 +200,12 @@ describe("TaskAttentionDialog", () => {
     }
   });
 
-  it("aggregates all opened Chat/Work scopes, filters after full Controller query, and ignores stale facts", async () => {
+  it("aggregates cached metadata across opened Chat/Work scopes without issuing a list query", async () => {
     const view = setup();
     await waitFor(() =>
       expect(view.getByTestId("task-attention-trigger").textContent).toContain("3"),
     );
-    expect(view.listTaskList).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "timeline",
-        limit: undefined,
-        workspaceScopes: [
-          { workspacePath: "/chat" },
-          { workspacePath: "/work", workspaceIdentity: "remote:server-a:/work" },
-        ],
-      }),
-    );
+    expect(view.listTaskList).not.toHaveBeenCalled();
     fireEvent.click(view.getByTestId("task-attention-trigger"));
     expect(screen.getByRole("dialog")).toBeTruthy();
     expect(screen.getByRole("button", { name: /Chat question/ })).toBeTruthy();
@@ -212,7 +213,8 @@ describe("TaskAttentionDialog", () => {
     expect(screen.getByRole("button", { name: /Execution error/ })).toBeTruthy();
     expect(screen.queryByText("Stale question")).toBeNull();
     expect(screen.queryByText("Stale error")).toBeNull();
-    expect(view.listTaskList).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("dialog").getAttribute("aria-modal")).not.toBe("true");
+    expect(view.listTaskList).not.toHaveBeenCalled();
   });
 
   it("selects the exact session before storing a question open intent", async () => {
@@ -276,19 +278,94 @@ describe("TaskAttentionDialog", () => {
     expect(getTaskInteractionOpenRequest()).toBeNull();
   });
 
-  it("shows loading/empty and refreshes through the same Controller query", async () => {
-    const view = setup([]);
-    fireEvent.click(view.getByTestId("task-attention-trigger"));
-    expect(screen.getByRole("status").textContent).toContain("taskAttention.loading");
-    await waitFor(() => expect(screen.getByText("taskAttention.empty")).toBeTruthy());
-    view.setSource([items()[2]!]);
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "taskAttention.refresh" }));
+  it("uses Controller snapshots and deltas over stale cached metadata without a query", async () => {
+    const view = setup();
+    const snapshot = (tasks: WindowHostControllerTaskListItem[]) => ({
+      protocolVersion: 1 as const,
+      logEpoch: "epoch",
+      tasks: tasks.map(
+        ({ activity, remoteSessionId, sourceAvailability, liveStatus, ...meta }) => ({
+          address: {
+            workspacePath: meta.workspacePath,
+            workspaceIdentity: meta.workspaceIdentity,
+            taskId: meta.taskId,
+            remoteSessionId,
+          },
+          meta,
+          membership: { pinned: false, archived: false, active: true },
+          sourceAvailability,
+          liveStatus,
+          activity,
+        }),
+      ),
     });
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Execution error/ })).toBeTruthy(),
-    );
-    expect(view.listTaskList).toHaveBeenCalledTimes(2);
-    expect(screen.queryByText("taskAttention.empty")).toBeNull();
+    await act(async () => {
+      view.frames.fire({
+        topic: "controller/tasks-index",
+        subscriptionId: "controller/tasks-index",
+        logEpoch: "epoch",
+        fromSeq: 0,
+        toSeq: 0,
+        sentAt: 1,
+        payload: { kind: "snapshot", snapshot: snapshot([]) },
+      });
+    });
+    expect(view.queryByTestId("task-attention-trigger")).toBeNull();
+    await act(async () => {
+      view.frames.fire({
+        topic: "controller/tasks-index",
+        subscriptionId: "controller/tasks-index",
+        logEpoch: "epoch",
+        fromSeq: 0,
+        toSeq: 1,
+        sentAt: 2,
+        payload: {
+          kind: "deltas",
+          deltas: [{ op: "task.upserted", task: snapshot([items()[0]!]).tasks[0]! }],
+        },
+      });
+    });
+    expect(view.getByTestId("task-attention-trigger").textContent).toContain("1");
+    fireEvent.click(view.getByTestId("task-attention-trigger"));
+    expect(screen.getByRole("button", { name: /Chat question/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Work permission/ })).toBeNull();
+    expect(view.listTaskList).not.toHaveBeenCalled();
+  });
+
+  it("excludes cached attention from closed workspaces and same paths under another identity", () => {
+    const view = setup([
+      ...items(),
+      item("Closed task", { workspacePath: "/closed", status: "error" }),
+      item("Other remote", {
+        workspacePath: "/work",
+        workspaceIdentity: "remote:other:/work",
+        status: "error",
+      }),
+    ]);
+    expect(view.getByTestId("task-attention-trigger").textContent).toContain("3");
+    fireEvent.click(view.getByTestId("task-attention-trigger"));
+    expect(screen.queryByText("Closed task")).toBeNull();
+    expect(screen.queryByText("Other remote")).toBeNull();
+    expect(view.listTaskList).not.toHaveBeenCalled();
+  });
+
+  it("hides the zero state and reacts to the existing metadata cache without querying", async () => {
+    const view = setup([]);
+    expect(view.queryByTestId("task-attention-trigger")).toBeNull();
+    act(() => {
+      const task = items()[2]!;
+      useTaskQueryCacheStore
+        .getState()
+        .upsertTaskMeta(attachTaskListRowActivity(task, task.activity!));
+    });
+    const trigger = view.getByTestId("task-attention-trigger");
+    expect(trigger.textContent).toContain("1");
+    const badge = trigger.querySelector("[data-attention-count]")!;
+    expect(badge.className).toContain("bg-interaction-confirmation-surface");
+    fireEvent.click(trigger);
+    expect(screen.getByRole("button", { name: /Execution error/ })).toBeTruthy();
+    act(() => useTaskQueryCacheStore.getState().clearAll());
+    expect(view.queryByTestId("task-attention-trigger")).toBeNull();
+    expect(view.listTaskList).not.toHaveBeenCalled();
   });
 });

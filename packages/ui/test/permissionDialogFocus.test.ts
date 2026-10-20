@@ -7,6 +7,11 @@ import type { ZCodePermissionRequest } from "@zcode/shared";
 import type { ConversationSnapshot } from "@zcode/shared/zcode-protocol-v4";
 import { PermissionDialog } from "@/PermissionDialog.js";
 import { ZCodeIntlProvider } from "@/i18n/IntlProvider.js";
+import {
+  requestTaskInteractionOpen,
+  getTaskInteractionOpenRequest,
+  consumeTaskInteractionOpenRequest,
+} from "@/v4/taskAttentionNavigation.js";
 import { V4InteractionDialogs } from "@/v4/V4InteractionDialogs.js";
 
 vi.mock("@/v4/V4ConversationContext.js", () => ({
@@ -79,6 +84,8 @@ describe("PermissionDialog focus", () => {
   });
   afterEach(() => {
     cleanup();
+    const pending = getTaskInteractionOpenRequest();
+    if (pending) consumeTaskInteractionOpenRequest(pending);
     vi.unstubAllGlobals();
   });
 
@@ -332,6 +339,67 @@ describe("PermissionDialog focus", () => {
     });
 
     expect(document.activeElement).toBe(feedbackInput);
+  });
+
+  it.each([false, true])(
+    "keeps inactive permission cards operable without automatic focus (hidden=%s)",
+    (hidden) => {
+      const frames = installAnimationFrameController();
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: hidden ? "hidden" : "visible",
+      });
+      const outside = document.createElement("input");
+      document.body.append(outside);
+      outside.focus();
+      const view = render(
+        createElement(
+          ZCodeIntlProvider,
+          { initialLocale: "zh-CN" },
+          createElement(V4InteractionDialogs, {
+            sessionId: "task-focus",
+            workspacePath: "/tmp/workspace",
+            isActive: hidden,
+            snapshot: permissionSnapshot("background-permission"),
+          }),
+        ),
+      );
+      act(() => frames.flush());
+      expect(view.getAllByRole("option").length).toBeGreaterThan(0);
+      expect(view.container.querySelector("textarea")).not.toBeNull();
+      expect(document.activeElement).toBe(outside);
+      outside.remove();
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    },
+  );
+
+  it("scrolls and focuses an inline permission card for a matching attention target", () => {
+    const frames = installAnimationFrameController();
+    const view = render(
+      createElement(
+        ZCodeIntlProvider,
+        { initialLocale: "zh-CN" },
+        createElement(V4InteractionDialogs, {
+          sessionId: "task-focus",
+          workspacePath: "/tmp/workspace",
+          snapshot: permissionSnapshot("attention-permission"),
+        }),
+      ),
+    );
+    act(() => frames.flush());
+    const wrapper = view.container.firstElementChild as HTMLElement;
+    const scrollIntoView = vi.fn();
+    wrapper.scrollIntoView = scrollIntoView;
+    act(() => {
+      requestTaskInteractionOpen({
+        workspacePath: "/tmp/workspace",
+        sessionId: "task-focus",
+        interactionId: "attention-permission",
+      });
+    });
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+    expect(document.activeElement).toBe(view.getAllByRole("option")[0]);
+    expect(getTaskInteractionOpenRequest()).toBeNull();
   });
 
   it("remounts the dialog when the pending permission changes", () => {

@@ -24,9 +24,11 @@ import {
   CommandShortcut,
 } from "@/components/ui/command.js";
 import { cn } from "@/components/lib/utils.js";
+import { Button } from "@/components/ui/button.js";
 import { toast } from "@/components/ui/toast.js";
+import { SessionHistoryModeLabel } from "@/SessionHistoryModeLabel.js";
 import { useGlobalTaskList } from "@/hooks/useGlobalTaskList.js";
-import { useSessionHistoryModePredicate } from "@/hooks/useSessionHistoryMode.js";
+import { useSessionHistoryModeResolver } from "@/hooks/useSessionHistoryMode.js";
 import { useServices } from "@/hooks/useServices.js";
 import { useIsOfficeMode } from "@/hooks/useInterfaceMode.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
@@ -36,10 +38,7 @@ import { toWorkspaceRelativePath } from "@/lib/taskChangeSummary.js";
 import { getPathLeaf } from "@/lib/path.js";
 import { logger } from "@/logger.js";
 import { HighlightedMatchText } from "@/quickpick/HighlightedMatchText.js";
-import {
-  QUICK_PICK_SECTION_ORDER,
-  type QuickPickCommand,
-} from "@/quickpick/quickPickCommands.js";
+import { QUICK_PICK_SECTION_ORDER, type QuickPickCommand } from "@/quickpick/quickPickCommands.js";
 import { QUICK_PICK_ICON_BY_KIND } from "@/quickpick/quickPickCommandIcons.js";
 import {
   quickPickCommandClassName,
@@ -191,7 +190,10 @@ function matchesCommand(command: QuickPickCommand, title: string, query: string)
   }
 
   const searchText = `${title} ${command.keywords.join(" ")}`.toLocaleLowerCase();
-  return normalizedQuery.split(/\s+/).filter(Boolean).every((part) => searchText.includes(part));
+  return normalizedQuery
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((part) => searchText.includes(part));
 }
 
 function buildTaskResultRows(params: {
@@ -251,8 +253,9 @@ export function CommandCenterScopeButton({
   children: ReactNode;
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
       role="tab"
       aria-selected={active}
       onClick={onClick}
@@ -268,7 +271,7 @@ export function CommandCenterScopeButton({
     >
       {children}
       <span>{label}</span>
-    </button>
+    </Button>
   );
 }
 
@@ -348,14 +351,15 @@ export function CommandCenterSearchHistory({
     <>
       <div className="flex items-center gap-2 px-3 pt-2 text-ui-sm font-medium text-foreground-subtle">
         <span>{historyLabel}</span>
-        <button
+        <Button
           type="button"
+          variant="ghost"
           aria-label={clearLabel}
           className="ml-auto inline-grid size-6 place-items-center rounded-md text-foreground-subtlest hover:bg-surface-hover hover:text-foreground"
           onClick={onClear}
         >
           <Trash2Icon className="size-3.5" />
-        </button>
+        </Button>
       </div>
       <div
         className={cn(
@@ -366,37 +370,34 @@ export function CommandCenterSearchHistory({
         {entries.map((entry) => {
           const prefix = scopeToPrefix(entry.scope);
           return (
-            <button
+            <Button
               key={`${entry.scope}:${entry.query}:${entry.updatedAt}`}
               type="button"
+              variant="ghost"
               // text-ui-base 随 --ui-font-size（12–20px）缩放，不能用固定 h-5
               // 否则 20px 字号下内容区（20px - 2px 边框 = 18px）装不下字体行盒，
               // 配合外层 overflow-hidden 会裁切文字。改用 min-h-5 + py-0.5 + leading-none
               // 让高度随字号增长，保证 12–20px 全范围可读。
-              className="inline-flex min-h-5 max-w-44 shrink-0 items-center gap-1 rounded-full border border-border px-2 py-0.5 leading-none text-ui-base text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
+              className="inline-flex h-auto min-h-5 max-w-44 shrink-0 items-center gap-1 rounded-full border border-border px-2 py-0.5 text-ui-base leading-none text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
               onClick={() => onPickEntry(entry)}
             >
-              {prefix ? (
-                <span className="font-mono text-ui-xs text-brand">{prefix}</span>
-              ) : null}
+              {prefix ? <span className="font-mono text-ui-xs text-brand">{prefix}</span> : null}
               <span className="min-w-0 truncate">{entry.query}</span>
-            </button>
+            </Button>
           );
         })}
         {canExpand ? (
-          <button
+          <Button
             type="button"
+            variant="ghost"
             aria-label={expanded ? collapseLabel : expandLabel}
             className="absolute top-1 right-3 inline-grid size-6 place-items-center rounded-md text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
             onClick={onToggleExpanded}
           >
             <ChevronDownIcon
-              className={cn(
-                "size-3.5 transition-transform",
-                expanded ? "rotate-180" : "",
-              )}
+              className={cn("size-3.5 transition-transform", expanded ? "rotate-180" : "")}
             />
-          </button>
+          </Button>
         ) : null}
       </div>
     </>
@@ -437,10 +438,12 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
   const isChatMode = useIsOfficeMode();
   const { fileService } = useServices();
   const { intl } = useZCodeIntl();
-  const matchesHistoryMode = useSessionHistoryModePredicate(workspaceTabs);
+  const resolveHistoryMode = useSessionHistoryModeResolver();
   const workspaceKey = workspaceIdentity?.trim() || workspaceAbsPath;
   const [rawQuery, setRawQuery] = useState("");
-  const [manualScope, setManualScope] = useState<CommandCenterSearchScope>(isChatMode ? "conversations" : "all");
+  const [manualScope, setManualScope] = useState<CommandCenterSearchScope>(
+    isChatMode ? "conversations" : "all",
+  );
   const [expandedSections, setExpandedSections] = useState<Set<CommandCenterSectionId>>(
     () => new Set(),
   );
@@ -459,9 +462,8 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
   const activeScope = resolvedQuery.explicitScope ? resolvedQuery.scope : manualScope;
   const searchQuery = resolvedQuery.query;
   const hasSearchQuery = searchQuery.trim().length > 0;
-  const searchConversations = open && hasSearchQuery && (
-    activeScope === "all" || activeScope === "conversations"
-  );
+  const searchConversations =
+    open && hasSearchQuery && (activeScope === "all" || activeScope === "conversations");
   const searchFiles = open && hasSearchQuery && (activeScope === "all" || activeScope === "files");
   const searchWorkspaceTabs = useMemo(
     () => (searchConversations ? effectiveWorkspaceTabs : []),
@@ -479,7 +481,6 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
     [currentWorkspaceTabs, hasSearchQuery, open],
   );
   const taskList = useGlobalTaskList({
-    predicate: matchesHistoryMode,
     kind: "active",
     workspaceTabs: searchWorkspaceTabs,
     sortBy: "updated",
@@ -488,7 +489,6 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
     collapsedLimit: COMMAND_CENTER_TASK_RESULT_LIMIT,
   });
   const recentTaskList = useGlobalTaskList({
-    predicate: matchesHistoryMode,
     kind: "active",
     workspaceTabs: recentTaskWorkspaceTabs,
     sortBy: "updated",
@@ -499,6 +499,22 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
         ? COMMAND_CENTER_TASK_RESULT_LIMIT + (activeTaskId ? 1 : 0)
         : COMMAND_CENTER_CONTEXT_SECTION_LIMIT + (activeTaskId ? 1 : 0),
   });
+  const workspacePurposeByKey = useMemo(
+    () =>
+      new Map(
+        workspaceTabs.map((tab) => [
+          tab.workspaceIdentity?.trim() || tab.workspacePath,
+          tab.workspacePurpose,
+        ]),
+      ),
+    [workspaceTabs],
+  );
+  const taskMode = (task: ZCodeTaskMeta) =>
+    resolveHistoryMode(
+      task,
+      task.taskId,
+      workspacePurposeByKey.get(task.workspaceIdentity?.trim() || task.workspacePath),
+    );
   const workspaceLabelByKey = useMemo(
     () =>
       new Map(
@@ -536,9 +552,7 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
     [searchQuery, workspaceFiles],
   );
   const recentChangeRows = useMemo(
-    () =>
-      [...(effectiveActiveTaskChangeSummary?.files ?? [])]
-        .sort(compareRecentChangedFiles),
+    () => [...(effectiveActiveTaskChangeSummary?.files ?? [])].sort(compareRecentChangedFiles),
     [effectiveActiveTaskChangeSummary],
   );
   const recentChangePreviewRows = useMemo(
@@ -546,9 +560,7 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
     [recentChangeRows],
   );
   const recentTaskRows = useMemo(
-    () =>
-      recentTaskList.items
-        .filter((task) => task.taskId !== activeTaskId),
+    () => recentTaskList.items.filter((task) => task.taskId !== activeTaskId),
     [activeTaskId, recentTaskList.items],
   );
   const recentTaskPreviewRows = useMemo(
@@ -728,16 +740,15 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
     }
 
     return (
-      <button
+      <Button
         type="button"
-        className="mt-0.5 flex min-h-7 w-full items-center gap-1.5 rounded-xl px-2.5 pl-8 text-left text-ui-base text-foreground-subtle hover:bg-menu-hover hover:text-foreground"
-        onClick={() =>
-          setExpandedSections((current) => new Set(current).add(sectionId))
-        }
+        variant="ghost"
+        className="mt-0.5 h-auto justify-start flex min-h-7 w-full items-center gap-1.5 rounded-xl px-2.5 pl-8 text-left text-ui-base text-foreground-subtle hover:bg-menu-hover hover:text-foreground"
+        onClick={() => setExpandedSections((current) => new Set(current).add(sectionId))}
       >
         {intl.formatMessage({ id: "commandCenter.moreResults" })}
         <ChevronDownIcon className="size-3.5" />
-      </button>
+      </Button>
     );
   };
 
@@ -770,9 +781,7 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
               onSelect={() => selectRecentChange(file)}
             >
               <FileDisplayIcon src={descriptor.fileIconSrc} size={14} className="shrink-0" />
-              <span className="min-w-0 flex-1 truncate">
-                {relativePath}
-              </span>
+              <span className="min-w-0 flex-1 truncate">{relativePath}</span>
               <CommandShortcut className={quickPickMetadataClassName}>
                 <span className="text-diff-added">+{file.added}</span>{" "}
                 <span className="text-diff-removed">-{file.removed}</span>
@@ -813,6 +822,7 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
             >
               <MessageSquareIcon className="size-3.5 text-foreground-subtle" />
               <span className="min-w-0 flex-1 truncate">{title}</span>
+              <SessionHistoryModeLabel mode={taskMode(task)} />
               <CommandShortcut className={quickPickMetadataClassName}>
                 {formatTaskRelativeTime(task.updatedAt, intl)}
               </CommandShortcut>
@@ -870,9 +880,10 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
       return null;
     }
 
-    const visibleRows = activeScope === "conversations" || expandedSections.has("conversations")
-      ? conversationRows
-      : conversationRows.slice(0, COMMAND_CENTER_SECTION_LIMIT);
+    const visibleRows =
+      activeScope === "conversations" || expandedSections.has("conversations")
+        ? conversationRows
+        : conversationRows.slice(0, COMMAND_CENTER_SECTION_LIMIT);
     return (
       <CommandGroup heading={intl.formatMessage({ id: "commandCenter.section.conversations" })}>
         {taskList.loading && conversationRows.length === 0 ? (
@@ -905,6 +916,7 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
                   </span>
                 ) : null}
               </span>
+              <SessionHistoryModeLabel mode={taskMode(task)} />
               <CommandShortcut className={quickPickMetadataClassName}>
                 {workspaceLabel}
               </CommandShortcut>
@@ -928,9 +940,10 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
       return null;
     }
 
-    const visibleRows = activeScope === "files" || expandedSections.has("files")
-      ? fileRows
-      : fileRows.slice(0, COMMAND_CENTER_SECTION_LIMIT);
+    const visibleRows =
+      activeScope === "files" || expandedSections.has("files")
+        ? fileRows
+        : fileRows.slice(0, COMMAND_CENTER_SECTION_LIMIT);
     return (
       <CommandGroup heading={intl.formatMessage({ id: "commandCenter.section.files" })}>
         {workspaceFilesLoading && fileRows.length === 0 ? (
@@ -1048,11 +1061,6 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
               <FileIcon className="size-3" />
             </CommandCenterScopeButton>
           </div>
-          {(activeScope === "all" || activeScope === "conversations") ? (
-            <p data-chat-search-scope="true" className="px-1 pt-2 text-ui-sm text-foreground-subtle">
-              {intl.formatMessage({ id: "chatWorkspace.searchScope" })}
-            </p>
-          ) : null}
         </div>
         <CommandList className={commandCenterListClassName}>
           {!hasSearchQuery ? (

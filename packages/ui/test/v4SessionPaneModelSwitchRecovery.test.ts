@@ -2915,6 +2915,8 @@ describe("SessionPane Plan mode goal guard", () => {
     );
 
     const root = await renderPane();
+    // 挂载时的分类保存提示独立于本用例检查的 Goal admission。
+    mocks.toast.mockClear();
     let sendResult: unknown;
     await act(async () => {
       sendResult = await captured.composerProps?.onSendText("/goal 正常目标");

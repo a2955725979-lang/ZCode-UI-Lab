@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   consumeTaskInteractionOpenRequest,
   getTaskInteractionOpenRequest,
+  matchesTaskInteractionOpenRequest,
   requestTaskInteractionOpen,
   subscribeTaskInteractionOpen,
 } from "@/v4/taskAttentionNavigation.js";
@@ -10,6 +11,40 @@ afterEach(() => {
   if (pending) consumeTaskInteractionOpenRequest(pending);
 });
 describe("task attention navigation intent", () => {
+  it("matches identity, session and optional request before revealing an inline card", () => {
+    const target = {
+      workspacePath: "/new-path",
+      workspaceIdentity: " remote ",
+      sessionId: "session",
+      interactionId: "ask",
+    };
+    expect(
+      matchesTaskInteractionOpenRequest(
+        {
+          workspacePath: "/old-path",
+          workspaceIdentity: "remote",
+          sessionId: "session",
+          interactionId: "ask",
+        },
+        target,
+      ),
+    ).toBe(true);
+    expect(matchesTaskInteractionOpenRequest({ ...target, interactionId: "other" }, target)).toBe(
+      false,
+    );
+    expect(matchesTaskInteractionOpenRequest({ ...target, sessionId: "other" }, target)).toBe(
+      false,
+    );
+    expect(
+      matchesTaskInteractionOpenRequest(
+        { workspacePath: "/new-path", sessionId: "session" },
+        target,
+      ),
+    ).toBe(false);
+    expect(matchesTaskInteractionOpenRequest({ ...target, interactionId: undefined }, target)).toBe(
+      true,
+    );
+  });
   it("retains the latest target and cannot consume a newer request using stale identity", () => {
     const first = requestTaskInteractionOpen({
       workspacePath: "/first",

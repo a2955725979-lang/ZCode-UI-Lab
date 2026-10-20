@@ -47,7 +47,6 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import type { Locale, RemoteTarget, UserInfo, ZCodeTaskMeta } from "@zcode/shared";
-import { BUILTIN_MODEL_PROVIDER_IDS } from "@zcode/shared";
 import {
   TID_CONVERSATION_NEW_TASK,
   TID_CONVERSATION_SECTION,
@@ -74,6 +73,7 @@ import {
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { logger } from "@/logger.js";
 import { TaskAttentionDialog } from "@/TaskAttentionDialog.js";
+import { useSessionHistoryFilter } from "@/hooks/useSessionHistoryMode.js";
 import { WorkspaceModeSwitcher } from "@/WorkspaceModeSwitcher.js";
 import { useIsOfficeMode } from "@/hooks/useInterfaceMode.js";
 import { NewTaskButtonGroup } from "@/NewTaskButtonGroup.js";
@@ -95,7 +95,6 @@ import {
   reorderSidebarPurposeSections,
 } from "@/lib/sidebarPurposeSectionPreferences.js";
 import { useShortcutCommandLabel } from "@/shortcuts/useShortcutBindings.js";
-import { setPendingSettingsSectionIntent } from "@/lib/settingsNavigation.js";
 import { buildTaskWorkspaceKey } from "@/lib/taskQueryCache.js";
 import {
   increaseWorkspaceTaskVisibleLimit,
@@ -619,14 +618,19 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebarComponent({
     webRemoteControlWorkspaceSwitcher || isWebRemoteControl,
   );
   const isChatMode = useIsOfficeMode();
+  const { filter: historyFilter, setFilter: setHistoryFilter } = useSessionHistoryFilter();
   const [chatHistoryArchived, setChatHistoryArchived] = useState(false);
   const taskViewMode = resolveSidebarTaskViewMode({
     showArchivedTasks,
     taskOrganizeBy,
   });
   const effectiveTaskViewMode = isChatMode
-    ? chatHistoryArchived ? "archived" : "timeline"
-    : isWebRemoteControlSidebar && taskViewMode === "grouped" ? "workspace" : taskViewMode;
+    ? chatHistoryArchived
+      ? "archived"
+      : "timeline"
+    : isWebRemoteControlSidebar && taskViewMode === "grouped"
+      ? "workspace"
+      : taskViewMode;
   const visibleWorkspaceTaskKeys = useMemo(
     () =>
       resolveVisibleWorkspaceTaskKeys({
@@ -1489,30 +1493,38 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebarComponent({
           >
             <WorkspaceModeSwitcher className="mb-2" />
             {isChatMode ? (
-              <Button type="button" variant="ghost" size="lg" className="w-full justify-start gap-2 text-foreground hover:bg-surface-hover"
-                data-chat-new="true" onClick={onCreateConversationTask}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="lg"
+                className="w-full justify-start gap-2 text-foreground hover:bg-surface-hover"
+                data-chat-new="true"
+                onClick={onCreateConversationTask}
+              >
                 <MessageCirclePlus className="size-4" />
                 {intl.formatMessage({ id: "chatWorkspace.newChat" })}
               </Button>
-            ) : <WorkspaceNewTaskTooltip disabledReason={workspaceReadOnlyReason}>
-              <NewTaskButtonGroup
-                disabled={workspaceReadOnly}
-                onCreateTask={() => {
-                  if (workspaceReadOnly) {
-                    return;
-                  }
-                  if (taskViewMode === "grouped") {
-                    if (createGroupedTaskDraftAction) {
-                      createGroupedTaskDraftAction();
+            ) : (
+              <WorkspaceNewTaskTooltip disabledReason={workspaceReadOnlyReason}>
+                <NewTaskButtonGroup
+                  disabled={workspaceReadOnly}
+                  onCreateTask={() => {
+                    if (workspaceReadOnly) {
                       return;
                     }
-                    onCreateTask({ groupedDraftPlacement: { type: "top" } });
-                    return;
-                  }
-                  onCreateTask({ createSource: "project" });
-                }}
-              />
-            </WorkspaceNewTaskTooltip>}
+                    if (taskViewMode === "grouped") {
+                      if (createGroupedTaskDraftAction) {
+                        createGroupedTaskDraftAction();
+                        return;
+                      }
+                      onCreateTask({ groupedDraftPlacement: { type: "top" } });
+                      return;
+                    }
+                    onCreateTask({ createSource: "project" });
+                  }}
+                />
+              </WorkspaceNewTaskTooltip>
+            )}
             <Button
               variant="ghost"
               onClick={onOpenCommandCenter}
@@ -1522,10 +1534,11 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebarComponent({
             >
               <Search className="size-4" />
               <span className="min-w-0 flex-1 truncate text-left">
-                {intl.formatMessage({ id: isChatMode ? "chatWorkspace.search" : "commandCenter.open" })}
+                {intl.formatMessage({
+                  id: isChatMode ? "chatWorkspace.search" : "commandCenter.open",
+                })}
               </span>
-              {/* Bugfix: 移动远控入口整理时误删了侧栏顶部的整行搜索入口。
-                  这里恢复入口但仍打开统一 Command Center，避免重新启用已下线的 TaskSearchDialog 查询链路。 */}
+              {/* 搜索统一打开 Command Center，避免并行维护重复的会话查询入口。 */}
               <span className="ml-auto shrink-0 text-ui-xs font-normal text-foreground-subtlest">
                 {commandCenterShortcutLabel}
               </span>
@@ -1597,21 +1610,61 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebarComponent({
               )}
               style={workspaceScrollMaskStyle}
             >
-              {isChatMode ? (
-                <div className="flex items-center justify-between gap-2 px-3">
-                  <span className="text-ui-sm font-medium text-foreground-subtle">{intl.formatMessage({ id: "chatWorkspace.history" })}</span>
-                  <div className="flex items-center gap-1">
-                    {chatHistoryArchived ? (
-                      <div ref={setArchivedActionsContainer} data-testid="archived-tasks-toolbar-actions" className="flex shrink-0 items-center" />
-                    ) : null}
-                    <Button type="button" variant="ghost" size="sm" aria-pressed={chatHistoryArchived}
-                      onClick={() => setChatHistoryArchived((current) => !current)}>
-                      <Archive className="size-3.5" />
-                      {intl.formatMessage({ id: "chatWorkspace.archived" })}
-                    </Button>
+              <div className="flex items-center justify-between gap-1 px-3">
+                <span className="min-w-0 truncate text-ui-sm font-medium text-foreground-subtle">
+                  {intl.formatMessage({ id: "chatWorkspace.history" })}
+                </span>
+                <div className="flex shrink-0 items-center gap-1">
+                  <div
+                    role="group"
+                    aria-label={intl.formatMessage({ id: "chatWorkspace.historyFilter" })}
+                    className="flex items-center rounded-md bg-surface p-0.5"
+                    data-history-filter={historyFilter}
+                  >
+                    {(["all", "chat", "work"] as const).map((filter) => (
+                      <Button
+                        key={filter}
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        aria-pressed={historyFilter === filter}
+                        className={cn(
+                          "px-1.5 text-ui-xs",
+                          historyFilter === filter
+                            ? "bg-selected text-foreground"
+                            : "text-foreground-subtle",
+                        )}
+                        onClick={() => setHistoryFilter(filter)}
+                      >
+                        {intl.formatMessage({ id: `chatWorkspace.${filter}` })}
+                      </Button>
+                    ))}
                   </div>
+                  {isChatMode ? (
+                    <>
+                      {chatHistoryArchived ? (
+                        <div
+                          ref={setArchivedActionsContainer}
+                          data-testid="archived-tasks-toolbar-actions"
+                          className="flex shrink-0 items-center"
+                        />
+                      ) : null}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-pressed={chatHistoryArchived}
+                        aria-label={intl.formatMessage({ id: "chatWorkspace.archived" })}
+                        title={intl.formatMessage({ id: "chatWorkspace.archived" })}
+                        onClick={() => setChatHistoryArchived((current) => !current)}
+                      >
+                        <Archive className="size-3.5" />
+                      </Button>
+                    </>
+                  ) : null}
                 </div>
-              ) : !isWebRemoteControlSidebar ? workspaceTaskToolbar() : null}
+              </div>
+              {!isChatMode && !isWebRemoteControlSidebar ? workspaceTaskToolbar() : null}
               {(isChatMode && !isWebRemoteControlSidebar) || shouldShowPinnedTasks ? (
                 // 归档切换主任务区时不应隐藏 pinned。
                 // pinned 是全局置顶区，归档态保持置顶区可见。

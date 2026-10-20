@@ -1,3 +1,4 @@
+import { FOLLOWUP_SUGGESTIONS_PROMPT } from "./followup-suggestions.js";
 import type { ContextSection } from "../types.js";
 import { estimateTokens } from "../utils.js";
 
@@ -31,6 +32,8 @@ export function buildDesktopContextSection(genUiOutputDirectory?: string): Conte
       "- file should be an absolute path or include the workspace folder segment so it can be resolved relative to the workspace.",
       "- Keep line ranges tight; end defaults to start.",
       '- Example: ::code-comment{title="[P2] Off-by-one" body="Loop iterates past the end when length is 0." file="/path/to/foo.ts" start=10 end=11 priority=2}',
+      "",
+      FOLLOWUP_SUGGESTIONS_PROMPT,
     ].join("\n"),
   );
 }

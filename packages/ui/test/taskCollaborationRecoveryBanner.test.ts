@@ -40,7 +40,7 @@ it("query-only recovery offers refresh and open, never mutation replay", () => {
     );
   try {
     render(entry);
-    expect(container.textContent).toContain("待确认");
+    expect(container.textContent).toContain("还不确定是否已创建，请先刷新历史");
     expect(container.textContent).not.toContain("重新发送");
     act(() =>
       Array.from(container.querySelectorAll("button"))

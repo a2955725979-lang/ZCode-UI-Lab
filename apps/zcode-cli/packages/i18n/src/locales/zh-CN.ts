@@ -31,7 +31,7 @@ export const zhCN: ZCodeCopy = {
   -p, --prompt <text>  单次运行 prompt，不打开 TUI
   --memory-bench   配合 --prompt 开启自动 Memory 提取并等待后退出（需已开启 Memory）
   --browser-use <mode> 启用 Browser Use backend（当前支持：headless）
-  --surface <surface>  设置无头 prompt/app-server 的呈现面：terminal 或 desktop
+  --surface <surface>  设置无头 prompt/app-server 的呈现面：terminal、desktop 或 web
   --browser-executable <path> headless Browser Use 使用的 Chrome/Chromium 路径
   --attach <path>  给 --prompt 附加本地文件；可重复传入
   --cwd <path>     从指定目录运行命令

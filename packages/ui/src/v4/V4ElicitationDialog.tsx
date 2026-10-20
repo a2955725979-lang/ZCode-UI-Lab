@@ -1,20 +1,9 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type ComponentProps,
-} from "react";
-import { ElicitationDialog } from "@/ElicitationDialog.js";
-import { Button } from "@/components/ui/button.js";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog.js";
+import { useEffect, useRef, useState, useSyncExternalStore, type ComponentProps } from "react";
+import type { ZCodeElicitationRequest } from "@zcode/shared";
+import type { ConversationSnapshot } from "@zcode/shared/zcode-protocol-v4";
+import { ElicitationDialog, type ElicitationDialogHandle } from "@/ElicitationDialog.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import {
-  consumeTaskInteractionOpenRequest,
-  getTaskInteractionOpenRequest,
-  subscribeTaskInteractionOpen,
-} from "@/v4/taskAttentionNavigation.js";
+import { useTaskInteractionReveal } from "@/v4/taskAttentionNavigation.js";
 
 export { isV4PlanApproval } from "@/v4/pendingInteractionAdapter.js";
 
@@ -50,6 +39,24 @@ export function buildV4ElicitationProgressKey(
   return `${request.requestId}:${request.currentQuestionIndex ?? 0}:${JSON.stringify(request.answerDrafts ?? {})}`;
 }
 
+export function getCurrentSessionInteractionSnapshot(
+  sessionId: string,
+  snapshot: ConversationSnapshot | null,
+): ConversationSnapshot | null {
+  return snapshot?.sessionId === sessionId ? snapshot : null;
+}
+
+export function resolveV4ElicitationRequest(
+  projected: ZCodeElicitationRequest | null,
+  botProgress: ZCodeElicitationRequest | null,
+): ZCodeElicitationRequest | null {
+  // Bugfix：V4 snapshot 只保留原始阻塞请求，Bot 代答后的逐题进度必须覆盖同一 request 的投影。
+  if (projected && botProgress?.requestId === projected.requestId) {
+    return botProgress;
+  }
+  return projected;
+}
+
 interface ResponseState {
   pending: boolean;
   failed: boolean;
@@ -58,7 +65,6 @@ interface ResponseState {
 // renderer 只持有提交覆盖层/展示意图；runtime 的 pendingInteractions 始终是权威。
 const responseStates = new Map<string, ResponseState>();
 const responseListeners = new Set<() => void>();
-const automaticallyOpenedQuestions = new Set<string>();
 function subscribeResponse(listener: () => void) {
   responseListeners.add(listener);
   return () => {
@@ -92,8 +98,6 @@ export function pruneV4ElicitationState(
       !activeRequestIds.has(requestId)
     );
   };
-  for (const key of automaticallyOpenedQuestions)
-    if (isExpired(key)) automaticallyOpenedQuestions.delete(key);
   for (const key of responseStates.keys()) if (isExpired(key)) updateResponse(key, null);
 }
 export function useInteractionDocumentVisible() {
@@ -109,13 +113,11 @@ export function useInteractionDocumentVisible() {
 }
 interface V4ElicitationDialogProps extends Omit<
   ComponentProps<typeof ElicitationDialog>,
-  "responding" | "responseError" | "onDefer" | "onRespond"
+  "responding" | "responseError" | "onRespond" | "ref"
 > {
   workspacePath: string;
   workspaceIdentity?: string;
   sessionId: string;
-  isPlanApproval: boolean;
-  canRestoreFocus: () => boolean;
   resolveResponse: (
     action: "accept" | "decline" | "cancel",
     content?: Record<string, unknown>,
@@ -127,8 +129,6 @@ export function V4ElicitationDialog({
   workspacePath,
   workspaceIdentity,
   sessionId,
-  isPlanApproval,
-  canRestoreFocus,
   resolveResponse,
   onAccepted,
   ...formProps
@@ -140,9 +140,7 @@ export function V4ElicitationDialog({
     sessionId,
     formProps.request.requestId,
   );
-  const [open, setOpen] = useState(false);
-  const previousFocusRef = useRef<HTMLElement | null>(null);
-  const entryRef = useRef<HTMLButtonElement | null>(null);
+  const cardRef = useRef<ElicitationDialogHandle | null>(null);
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -155,55 +153,20 @@ export function V4ElicitationDialog({
     () => responseStates.get(key) ?? null,
     () => null,
   );
-  const openRequest = useSyncExternalStore(
-    subscribeTaskInteractionOpen,
-    getTaskInteractionOpenRequest,
-    () => null,
+  useTaskInteractionReveal(
+    { workspacePath, workspaceIdentity, sessionId, interactionId: formProps.request.requestId },
+    formProps.autoFocus !== false,
+    cardRef,
   );
-  const openQuestion = useCallback(() => {
-    previousFocusRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setOpen(true);
-  }, []);
-  useEffect(() => {
-    if (!isPlanApproval && !automaticallyOpenedQuestions.has(key)) {
-      automaticallyOpenedQuestions.add(key);
-      openQuestion();
-    }
-  }, [isPlanApproval, key, openQuestion]);
-  useEffect(() => {
-    if (isPlanApproval || !openRequest || !canRestoreFocus()) return;
-    if (
-      (openRequest.workspaceIdentity?.trim() || openRequest.workspacePath) !==
-        (workspaceIdentity?.trim() || workspacePath) ||
-      openRequest.sessionId !== sessionId ||
-      (openRequest.interactionId && openRequest.interactionId !== formProps.request.requestId)
-    )
-      return;
-    if (consumeTaskInteractionOpenRequest(openRequest)) openQuestion();
-  }, [
-    canRestoreFocus,
-    formProps.request.requestId,
-    isPlanApproval,
-    openQuestion,
-    openRequest,
-    sessionId,
-    workspaceIdentity,
-    workspacePath,
-  ]);
-  const deferQuestion = () => {
-    void formProps.onFirstInteraction?.("navigation");
-    setOpen(false);
-  };
-  const dialog = (
+  return (
     <ElicitationDialog
       {...formProps}
+      ref={cardRef}
       key={buildV4ElicitationProgressKey(formProps.request)}
       responding={response?.pending === true || response?.accepted === true}
       responseError={
         response?.failed ? intl.formatMessage({ id: "chat.elicitation.responseFailed" }) : undefined
       }
-      onDefer={deferQuestion}
       onRespond={(_requestId, action, content) => {
         const existing = responseStates.get(key);
         if (existing?.pending || existing?.accepted) return;
@@ -218,54 +181,5 @@ export function V4ElicitationDialog({
         });
       }}
     />
-  );
-  if (isPlanApproval) return dialog;
-  return (
-    <>
-      <Button
-        ref={entryRef}
-        type="button"
-        variant="outline"
-        data-elicitation-pending-entry={formProps.request.requestId}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        onClick={openQuestion}
-        className="w-full justify-start gap-2"
-      >
-        <span className="shrink-0">
-          {intl.formatMessage({ id: "chat.elicitation.waitingAnswer" })}
-        </span>
-        <span className="truncate text-foreground-subtle">{formProps.request.message}</span>
-      </Button>
-      <Dialog
-        open={open}
-        onOpenChange={(next) => {
-          if (!next) deferQuestion();
-        }}
-      >
-        <DialogContent
-          showCloseButton={false}
-          aria-describedby={undefined}
-          data-elicitation-modal={formProps.request.requestId}
-          onOpenAutoFocus={(event) => event.preventDefault()}
-          onEscapeKeyDown={(event) => {
-            event.preventDefault();
-            deferQuestion();
-          }}
-          onCloseAutoFocus={(event) => {
-            event.preventDefault();
-            if (!canRestoreFocus() || document.visibilityState === "hidden") return;
-            if (previousFocusRef.current?.isConnected) previousFocusRef.current.focus();
-            else entryRef.current?.focus();
-          }}
-          className="max-w-2xl gap-0 border-0 bg-transparent p-0 shadow-none max-md:top-auto max-md:bottom-0 max-md:left-0 max-md:max-w-none max-md:translate-x-0 max-md:translate-y-0"
-        >
-          <DialogTitle className="sr-only">
-            {intl.formatMessage({ id: "chat.elicitation.title" })}
-          </DialogTitle>
-          {dialog}
-        </DialogContent>
-      </Dialog>
-    </>
   );
 }

@@ -75,45 +75,59 @@ afterEach(() => {
 });
 
 describe("V4 ordinary question presentation and response lifecycle", () => {
-  it("opens once, defers without response, restores focus and retains the draft on reopen/remount", async () => {
-    const state = snapshot(`open-once-${serial}`);
-    const previous = document.createElement("button");
-    document.body.append(previous);
-    previous.focus();
+  it("renders inline, collapses without response, and retains the draft across expansion and remount", async () => {
+    const state = snapshot(`inline-${serial}`);
     const view = render(ui(state));
-    await waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
-    fireEvent.change(document.querySelector("textarea")!, { target: { value: "保留跨收起草稿" } });
-    fireEvent.keyDown(document.querySelector("textarea")!, { key: "Escape" });
-    await waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
-    expect(document.activeElement).toBe(previous);
-    expect(sendCommand).not.toHaveBeenCalled();
-    view.rerender(ui({ ...state }));
+    const card = view.container.querySelector("[data-elicitation-dialog-card]")!;
     expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(view.container.querySelector("[data-elicitation-pending-entry]")).toBeNull();
+    fireEvent.change(view.container.querySelector("textarea")!, {
+      target: { value: "保留跨收起草稿" },
+    });
+    fireEvent.keyDown(card, { key: "Escape" });
+    expect(
+      view.container.querySelector("[data-elicitation-dialog-body]")?.classList.contains("hidden"),
+    ).toBe(true);
+    expect(sendCommand).not.toHaveBeenCalled();
+    fireEvent.keyDown(card, { key: "Escape" });
+    expect(view.container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
+      "保留跨收起草稿",
+    );
     view.unmount();
     const remounted = render(ui(state));
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    fireEvent.click(remounted.container.querySelector("[data-elicitation-pending-entry]")!);
-    await waitFor(() =>
-      expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("保留跨收起草稿"),
+    expect(remounted.container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
+      "保留跨收起草稿",
     );
-    previous.remove();
   });
-  it("does not open or move focus for inactive sessions or hidden documents, then opens when visible", async () => {
+  it("renders operable cards for inactive and hidden panes without stealing focus", async () => {
     const state = snapshot(`background-${serial}`);
     const previous = document.createElement("input");
     document.body.append(previous);
     previous.focus();
     const view = render(ui(state, { isActive: false }));
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(view.container.querySelector("[data-elicitation-dialog-card]")).not.toBeNull();
+    expect(
+      view.container.querySelector<HTMLButtonElement>("[data-elicitation-submit]")?.disabled,
+    ).toBe(false);
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
     expect(document.activeElement).toBe(previous);
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
     act(() => document.dispatchEvent(new Event("visibilitychange")));
     view.rerender(ui(state, { isActive: true }));
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(view.container.querySelector('button[role="option"]')).not.toBeNull();
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
     expect(document.activeElement).toBe(previous);
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
     act(() => document.dispatchEvent(new Event("visibilitychange")));
-    await waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        view.container.querySelector("[data-elicitation-dialog-card]"),
+      ),
+    );
     previous.remove();
   });
   it("locks pending and accepted responses, preserves an answer on failure and retries explicitly", async () => {
@@ -161,7 +175,9 @@ describe("V4 ordinary question presentation and response lifecycle", () => {
     await waitFor(() => expect(document.querySelector("textarea")).not.toBeNull());
     submit();
     view.rerender(ui(snapshot(id, "second-session")));
-    await waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector("[data-elicitation-dialog-card]")).not.toBeNull(),
+    );
     await act(async () => {
       fail({ status: "rejected" });
     });
@@ -173,12 +189,16 @@ describe("V4 ordinary question presentation and response lifecycle", () => {
     await waitFor(() => expect(sendCommand).toHaveBeenCalledTimes(2));
     expect(sendCommand.mock.calls[1]?.[0].sessionId).toBe("second-session");
   });
-  it("reopens a deferred question only for a matching explicit attention target", async () => {
+  it("expands, scrolls and focuses only for a matching explicit attention target", async () => {
     const state = snapshot(`attention-${serial}`);
-    render(ui(state, { workspaceIdentity: "remote-scope" }));
-    await waitFor(() => expect(document.querySelector("textarea")).not.toBeNull());
-    fireEvent.keyDown(document.querySelector("textarea")!, { key: "Escape" });
-    await waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+    const view = render(ui(state, { workspaceIdentity: "remote-scope" }));
+    const card = view.container.querySelector<HTMLDivElement>("[data-elicitation-dialog-card]")!;
+    const scrollIntoView = vi.fn();
+    card.scrollIntoView = scrollIntoView;
+    fireEvent.keyDown(view.container.querySelector("textarea")!, { key: "Escape" });
+    expect(
+      view.container.querySelector("[data-elicitation-dialog-body]")?.classList.contains("hidden"),
+    ).toBe(true);
     act(() => {
       requestTaskInteractionOpen({
         workspacePath: "/collaboration-workspace",
@@ -187,7 +207,9 @@ describe("V4 ordinary question presentation and response lifecycle", () => {
         interactionId: state.pendingInteractions[0]!.interactionId,
       });
     });
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(
+      view.container.querySelector("[data-elicitation-dialog-body]")?.classList.contains("hidden"),
+    ).toBe(true);
     expect(getTaskInteractionOpenRequest()?.workspaceIdentity).toBe("other-remote");
     act(() => {
       requestTaskInteractionOpen({
@@ -197,7 +219,11 @@ describe("V4 ordinary question presentation and response lifecycle", () => {
         interactionId: state.pendingInteractions[0]!.interactionId,
       });
     });
-    await waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" }));
+    expect(
+      view.container.querySelector("[data-elicitation-dialog-body]")?.classList.contains("hidden"),
+    ).toBe(false);
+    expect(document.activeElement).toBe(card);
     expect(getTaskInteractionOpenRequest()).toBeNull();
   });
   it("preserves the scoped submit lock across remount until the original response settles", async () => {
@@ -213,8 +239,7 @@ describe("V4 ordinary question presentation and response lifecycle", () => {
     await waitFor(() => expect(document.querySelector("textarea")).not.toBeNull());
     submit();
     first.unmount();
-    const second = render(ui(state));
-    fireEvent.click(second.container.querySelector("[data-elicitation-pending-entry]")!);
+    render(ui(state));
     await waitFor(() =>
       expect(
         document.querySelector<HTMLButtonElement>('[data-elicitation-submit="true"]')?.disabled,
@@ -257,6 +282,53 @@ describe("V4 ordinary question presentation and response lifecycle", () => {
     expect(document.querySelector('[role="alert"]')).toBeNull();
     submit();
     await waitFor(() => expect(sendCommand).toHaveBeenCalledTimes(2));
+  });
+  it("keeps a background plan card visible without stealing focus and preserves Escape decline", async () => {
+    const state = snapshot(`background-plan-${serial}`);
+    state.pendingInteractions[0]!.payload = {
+      kind: "userInput",
+      toolName: "ExitPlanMode",
+      prompt: "审核计划",
+      freeText: true,
+      questions: [{ question: "审核计划", options: [{ value: "approve", label: "批准" }] }],
+    };
+    const outside = document.createElement("input");
+    document.body.append(outside);
+    outside.focus();
+    const view = render(ui(state, { isActive: false }));
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+    expect(view.container.querySelector('button[role="option"]')).not.toBeNull();
+    expect(document.activeElement).toBe(outside);
+    fireEvent.keyDown(view.container.querySelector("[data-elicitation-dialog-card]")!, {
+      key: "Escape",
+    });
+    await waitFor(() => expect(sendCommand).toHaveBeenCalledTimes(1));
+    expect(sendCommand.mock.calls[0]?.[0].payload.answer.action).toBe("decline");
+    outside.remove();
+  });
+  it("keeps sensitive userInput inline, accessible and IME-safe without changing its answer channel", async () => {
+    const state = snapshot(`sensitive-${serial}`);
+    state.pendingInteractions[0]!.payload = {
+      kind: "userInput",
+      prompt: "输入密码",
+      freeText: true,
+      sensitive: true,
+    };
+    const view = render(ui(state));
+    const input = view.container.querySelector<HTMLInputElement>('input[type="password"]')!;
+    expect(input.getAttribute("aria-label")).toBe("输入密码");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    fireEvent.change(input, { target: { value: "fixture-answer" } });
+    fireEvent.compositionStart(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(sendCommand).not.toHaveBeenCalled();
+    fireEvent.compositionEnd(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(sendCommand).toHaveBeenCalledTimes(1));
+    expect(sendCommand.mock.calls[0]?.[0].type).toBe("resolveInteraction");
+    expect(sendCommand.mock.calls[0]?.[0].payload.answer).toEqual({ freeText: "fixture-answer" });
   });
   it("does not turn plan approval into ordinary skip/defer", async () => {
     const state = snapshot(`plan-${serial}`);

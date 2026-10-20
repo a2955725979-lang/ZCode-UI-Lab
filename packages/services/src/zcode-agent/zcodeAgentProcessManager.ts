@@ -471,7 +471,7 @@ function applyPresentationSurfaceToCommand(
   command: ZCodeAgentCommand | null,
   presentationSurface: ZCodeAgentCommandResolverContext["presentationSurface"],
 ): ZCodeAgentCommand | null {
-  if (!command || presentationSurface !== "desktop") {
+  if (!command || !presentationSurface) {
     return command;
   }
 
@@ -497,7 +497,7 @@ function applyPresentationSurfaceToCommand(
 
   return {
     ...command,
-    args: [...args, "--surface", "desktop"],
+    args: [...args, "--surface", presentationSurface],
   };
 }
 

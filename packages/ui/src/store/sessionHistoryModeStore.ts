@@ -2,6 +2,7 @@ import type { WorkspacePurpose } from "@zcode/shared";
 import { logger } from "@/logger.js";
 
 export type SessionHistoryMode = "chat" | "work";
+export type SessionHistoryFilter = "all" | SessionHistoryMode;
 export interface SessionHistoryScope {
   workspacePath: string;
   workspaceIdentity?: string;
@@ -19,15 +20,17 @@ export interface SessionHistoryModeClaimResult {
 
 type ModeStorage = Pick<Storage, "getItem" | "setItem"> & Partial<Pick<Storage, "key" | "length">>;
 export const SESSION_HISTORY_MODE_STORAGE_PREFIX = "zcode-session-history-mode:v1:";
+const SESSION_HISTORY_FILTER_STORAGE_PREFIX = "zcode-session-history-filter:v1:";
 
 function workspaceKey(scope: SessionHistoryScope): string {
   return scope.workspaceIdentity?.trim() || scope.workspacePath;
 }
 
 function storageKey(scope: SessionHistoryScope, sessionId: string): string {
-  return SESSION_HISTORY_MODE_STORAGE_PREFIX + encodeURIComponent(JSON.stringify([
-    workspaceKey(scope), sessionId,
-  ]));
+  return (
+    SESSION_HISTORY_MODE_STORAGE_PREFIX +
+    encodeURIComponent(JSON.stringify([workspaceKey(scope), sessionId]))
+  );
 }
 
 function browserStorage(): ModeStorage | undefined {
@@ -43,6 +46,7 @@ export function createSessionHistoryModeStore(storageOverride?: ModeStorage) {
   const listeners = new Set<() => void>();
   // UI 分类写入失败仍保留本窗口归属；不把它冒充已持久化的事实。
   const volatileModes = new Map<string, SessionHistoryMode>();
+  const volatileFilters = new Map<SessionHistoryMode, SessionHistoryFilter>();
   let revision = 0;
   let stopStorageListener: (() => void) | undefined;
   const emit = () => {
@@ -50,6 +54,28 @@ export function createSessionHistoryModeStore(storageOverride?: ModeStorage) {
     for (const listener of listeners) listener();
   };
   const getStorage = () => storageOverride ?? browserStorage();
+  const getSessionHistoryFilter = (mode: SessionHistoryMode): SessionHistoryFilter => {
+    const local = volatileFilters.get(mode);
+    if (local) return local;
+    try {
+      const saved = getStorage()?.getItem(SESSION_HISTORY_FILTER_STORAGE_PREFIX + mode);
+      return saved === "all" || saved === "chat" || saved === "work" ? saved : mode;
+    } catch {
+      return mode;
+    }
+  };
+  const setSessionHistoryFilter = (mode: SessionHistoryMode, filter: SessionHistoryFilter) => {
+    try {
+      const storage = getStorage();
+      if (!storage) throw new Error("Session history preference storage is unavailable");
+      storage.setItem(SESSION_HISTORY_FILTER_STORAGE_PREFIX + mode, filter);
+      volatileFilters.delete(mode);
+    } catch {
+      // 筛选只是展示偏好，存储不可用时在当前窗口保留选择，不阻断浏览历史。
+      volatileFilters.set(mode, filter);
+    }
+    emit();
+  };
   const getExplicitSessionHistoryMode = (
     scope: SessionHistoryScope,
     sessionId: string | null | undefined,
@@ -69,7 +95,8 @@ export function createSessionHistoryModeStore(storageOverride?: ModeStorage) {
     scope: SessionHistoryScope,
     sessionId: string | null | undefined,
     workspacePurpose?: WorkspacePurpose,
-  ): SessionHistoryMode => getExplicitSessionHistoryMode(scope, sessionId) ??
+  ): SessionHistoryMode =>
+    getExplicitSessionHistoryMode(scope, sessionId) ??
     (workspacePurpose === "conversation" ? "chat" : "work");
   const captureSessionHistoryModeResolver = () => {
     const snapshot = new Map<string, SessionHistoryMode>();
@@ -85,7 +112,11 @@ export function createSessionHistoryModeStore(storageOverride?: ModeStorage) {
       // 与单条读取相同：不可读取时使用旧记录默认分类，不修改存储。
     }
     for (const [key, mode] of volatileModes) snapshot.set(key, mode);
-    return (scope: SessionHistoryScope, sessionId: string | null | undefined, purpose?: WorkspacePurpose): SessionHistoryMode =>
+    return (
+      scope: SessionHistoryScope,
+      sessionId: string | null | undefined,
+      purpose?: WorkspacePurpose,
+    ): SessionHistoryMode =>
       (sessionId ? snapshot.get(storageKey(scope, sessionId)) : undefined) ??
       (purpose === "conversation" ? "chat" : "work");
   };
@@ -110,7 +141,8 @@ export function createSessionHistoryModeStore(storageOverride?: ModeStorage) {
     mode: SessionHistoryMode,
   ): SessionHistoryModeClaimResult => {
     const existing = getExplicitSessionHistoryMode(scope, sessionId);
-    if (existing) return { mode: existing, persisted: !volatileModes.has(storageKey(scope, sessionId)) };
+    if (existing)
+      return { mode: existing, persisted: !volatileModes.has(storageKey(scope, sessionId)) };
     try {
       setSessionHistoryMode(scope, sessionId, mode);
       return { mode, persisted: true };
@@ -126,9 +158,19 @@ export function createSessionHistoryModeStore(storageOverride?: ModeStorage) {
     listeners.add(listener);
     if (!stopStorageListener && typeof window !== "undefined") {
       const onStorage = (event: StorageEvent) => {
-        if (event.key === null || event.key.startsWith(SESSION_HISTORY_MODE_STORAGE_PREFIX)) {
-          if (event.key === null) volatileModes.clear();
-          else volatileModes.delete(event.key);
+        if (
+          event.key === null ||
+          event.key.startsWith(SESSION_HISTORY_MODE_STORAGE_PREFIX) ||
+          event.key.startsWith(SESSION_HISTORY_FILTER_STORAGE_PREFIX)
+        ) {
+          if (event.key === null) {
+            volatileModes.clear();
+            volatileFilters.clear();
+          } else if (event.key.startsWith(SESSION_HISTORY_FILTER_STORAGE_PREFIX)) {
+            volatileFilters.delete(
+              event.key.slice(SESSION_HISTORY_FILTER_STORAGE_PREFIX.length) as SessionHistoryMode,
+            );
+          } else volatileModes.delete(event.key);
           emit();
         }
       };
@@ -146,9 +188,13 @@ export function createSessionHistoryModeStore(storageOverride?: ModeStorage) {
     };
   };
   return {
+    getSessionHistoryFilter,
+    setSessionHistoryFilter,
     getSessionHistoryMode,
-    hasUnpersistedSessionHistoryMode: (scope: SessionHistoryScope, sessionId: string | null | undefined) =>
-      Boolean(sessionId && volatileModes.has(storageKey(scope, sessionId))),
+    hasUnpersistedSessionHistoryMode: (
+      scope: SessionHistoryScope,
+      sessionId: string | null | undefined,
+    ) => Boolean(sessionId && volatileModes.has(storageKey(scope, sessionId))),
     captureSessionHistoryModeResolver,
     getExplicitSessionHistoryMode,
     setSessionHistoryMode,
@@ -159,6 +205,8 @@ export function createSessionHistoryModeStore(storageOverride?: ModeStorage) {
 }
 
 export const {
+  getSessionHistoryFilter,
+  setSessionHistoryFilter,
   getSessionHistoryMode,
   hasUnpersistedSessionHistoryMode,
   captureSessionHistoryModeResolver,
@@ -170,14 +218,14 @@ export const {
 } = createSessionHistoryModeStore();
 
 export function createSessionHistoryModePredicate(
-  mode: SessionHistoryMode,
+  mode: SessionHistoryFilter,
   workspaces: readonly SessionHistoryWorkspace[],
 ): (task: SessionHistoryTask) => boolean {
   const resolve = captureSessionHistoryModeResolver();
-  const purposes = new Map(workspaces.map((scope) => [workspaceKey(scope), scope.workspacePurpose]));
-  return (task) => resolve(
-    task,
-    task.taskId,
-    purposes.get(workspaceKey(task)) ?? task.workspacePurpose,
-  ) === mode;
+  const purposes = new Map(
+    workspaces.map((scope) => [workspaceKey(scope), scope.workspacePurpose]),
+  );
+  return (task) =>
+    mode === "all" ||
+    resolve(task, task.taskId, purposes.get(workspaceKey(task)) ?? task.workspacePurpose) === mode;
 }

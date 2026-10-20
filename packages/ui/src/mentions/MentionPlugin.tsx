@@ -1,4 +1,5 @@
 /* eslint-disable max-lines */
+import { QUERY_COMPLETION_MENU_COMMAND } from "@/lib/editorCompletionState.js";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { ZCodeProvider } from "@zcode/shared";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
@@ -167,6 +168,19 @@ export function MentionPlugin({
     (activeTrigger?.trigger === "@" ||
       activeTrigger?.trigger === "$" ||
       activeTrigger?.trigger === "#");
+  useEffect(
+    () =>
+      editor.registerCommand(
+        QUERY_COMPLETION_MENU_COMMAND,
+        (query) => {
+          query.open ||= isOpen && Boolean(container);
+          return false;
+        },
+        COMMAND_PRIORITY_LOW,
+      ),
+    [editor, isOpen, container],
+  );
+
   const isContextTrigger = activeTrigger?.trigger === "@";
   const isSessionTrigger = activeTrigger?.trigger === "#";
   const isSkillTrigger = activeTrigger?.trigger === "$";

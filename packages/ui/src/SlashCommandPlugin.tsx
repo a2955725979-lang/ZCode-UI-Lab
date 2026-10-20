@@ -7,6 +7,7 @@
  * 2. 面板通过 portal 渲染到输入区上方的独立挂载层，展开时直接覆盖消息区
  * 3. 支持 Esc 关闭、上下键切换、Enter / Tab 选中，以及跟随输入做模糊搜索
  */
+import { QUERY_COMPLETION_MENU_COMMAND } from "@/lib/editorCompletionState.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ZCodeProvider } from "@zcode/shared";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
@@ -139,6 +140,18 @@ export function SlashCommandPlugin({
     [activeTrigger],
   );
   const isOpen = !disabled && activeTrigger !== null;
+  useEffect(
+    () =>
+      editor.registerCommand(
+        QUERY_COMPLETION_MENU_COMMAND,
+        (query) => {
+          query.open ||= isOpen && Boolean(container);
+          return false;
+        },
+        COMMAND_PRIORITY_LOW,
+      ),
+    [editor, isOpen, container],
+  );
 
   useEffect(() => {
     activeSignatureRef.current = activeSignature;

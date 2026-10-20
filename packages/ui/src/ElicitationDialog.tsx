@@ -3,6 +3,8 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useImperativeHandle,
+  type Ref,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -19,7 +21,14 @@ import { isImeComposingKeyEvent } from "@/lib/imeComposition.js";
 import type { ElicitationFormDraft } from "@/store/zcodeSessionStoreTypes.js";
 import { useZCodeIntl } from "./i18n/IntlProvider.js";
 
+export interface ElicitationDialogHandle {
+  reveal(): void;
+}
+
 interface ElicitationDialogProps {
+  ref?: Ref<ElicitationDialogHandle>;
+  /** 后台 pane 保持渲染，只限制自动取焦点。 */
+  autoFocus?: boolean;
   request: ZCodeElicitationRequest;
   autoResolution?: InteractionAutoResolution;
   onRespond: (
@@ -31,8 +40,6 @@ interface ElicitationDialogProps {
   onFirstInteraction?: (
     source: ElicitationAutoResolutionSnoozeSource,
   ) => boolean | void | Promise<boolean | void>;
-  /** 稍后回答只收起普通问题，不发送 decline/cancel。 */
-  onDefer?: () => void;
   responding?: boolean;
   responseError?: string;
   initialFormDraft?: ElicitationFormDraft;
@@ -119,6 +126,7 @@ export type DraftState = Record<string, AnswerDraft>;
 
 export type ElicitationCustomInputKeyAction =
   | "submit"
+  | "advance"
   | "dismiss"
   | "previousOption"
   | "nextOption";
@@ -126,6 +134,7 @@ export type ElicitationCustomInputKeyAction =
 export function resolveElicitationCustomInputKeyAction(event: {
   key: string;
   advanceKind?: "next" | "submit";
+  shiftKey?: boolean;
   ctrlKey?: boolean;
   metaKey?: boolean;
   compositionActive?: boolean;
@@ -134,8 +143,8 @@ export function resolveElicitationCustomInputKeyAction(event: {
   isPlanApproval?: boolean;
   hasPreviousQuestion?: boolean;
 }): ElicitationCustomInputKeyAction | null {
-  // 普通问题使用多行文本，裸 Enter 必须留给换行；只有明确快捷键可提交。
-  // ExitPlanMode 保留独立审批语义，不能继承普通问题的跳过/稍后回答动作。
+  // 普通问题与主 composer 一致：Enter 推进，Shift+Enter 换行。
+  // ExitPlanMode 保留独立审批语义。
   // 中文输入法用 Enter 确认候选时仍属于 composition，不能误提交给 agent。
   if (isImeComposingKeyEvent(event)) {
     return null;
@@ -150,7 +159,7 @@ export function resolveElicitationCustomInputKeyAction(event: {
     if (event.ctrlKey || event.metaKey || event.isPlanApproval) {
       return "submit";
     }
-    return null;
+    return event.shiftKey ? null : "advance";
   }
 
   if (event.key === "Escape") {
@@ -347,7 +356,8 @@ function ElicitationDialogContent({
   onFirstInteraction,
   initialFormDraft,
   onFormDraftChange,
-  onDefer,
+  ref,
+  autoFocus = true,
   responding = false,
   responseError,
 }: ElicitationDialogProps) {
@@ -367,7 +377,6 @@ function ElicitationDialogContent({
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const customInputRef = useRef<HTMLTextAreaElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
-  const submitButtonRef = useRef<HTMLButtonElement | null>(null);
   const customInputCompositionActiveRef = useRef(false);
   const firstInteractionReportedRef = useRef(false);
   const countdownSeconds = useElicitationCountdownSeconds(autoResolution);
@@ -409,7 +418,12 @@ function ElicitationDialogContent({
   const isPlanApproval = isPlanApprovalElicitationRequest(request);
 
   useEffect(() => {
-    if (getQuestionOptionCount(currentQuestion) === 0 || activeOptionIndex < 0) {
+    if (
+      !isDialogExpanded ||
+      (!autoFocus && !cardRef.current?.contains(document.activeElement)) ||
+      getQuestionOptionCount(currentQuestion) === 0 ||
+      activeOptionIndex < 0
+    ) {
       return;
     }
     const frameId = requestAnimationFrame(() => {
@@ -420,18 +434,18 @@ function ElicitationDialogContent({
       customInputRef.current?.focus();
     });
     return () => cancelAnimationFrame(frameId);
-  }, [activeOptionIndex, currentQuestion]);
+  }, [activeOptionIndex, autoFocus, currentQuestion, isDialogExpanded]);
 
   // 初始 activeOptionIndex=-1 时无按钮有焦点。卡片容器自动聚焦后
   // 可接收键盘事件，在容器层捕获 Tab/↓/↑/Enter 启动导航或推进。
   useEffect(() => {
-    if (activeOptionIndex < 0) {
+    if (autoFocus && isDialogExpanded && activeOptionIndex < 0) {
       const frameId = requestAnimationFrame(() => {
         cardRef.current?.focus();
       });
       return () => cancelAnimationFrame(frameId);
     }
-  }, [activeOptionIndex]);
+  }, [activeOptionIndex, autoFocus, isDialogExpanded]);
 
   const updateDraft = useCallback(
     (question: NormalizedElicitationQuestion, updater: (draft: AnswerDraft) => AnswerDraft) => {
@@ -454,9 +468,30 @@ function ElicitationDialogContent({
     [reportFirstInteraction, updateDraft],
   );
 
-  const focusSubmit = useCallback(() => {
-    requestAnimationFrame(() => submitButtonRef.current?.focus());
-  }, []);
+  const setExpanded = useCallback(
+    (expanded: boolean) => {
+      if (responding) return;
+      reportFirstInteraction("navigation");
+      setIsDialogExpanded(expanded);
+      requestAnimationFrame(() => cardRef.current?.focus());
+    },
+    [reportFirstInteraction, responding],
+  );
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      reveal() {
+        reportFirstInteraction("navigation");
+        setIsDialogExpanded(true);
+        requestAnimationFrame(() => {
+          cardRef.current?.scrollIntoView?.({ block: "nearest" });
+          cardRef.current?.focus();
+        });
+      },
+    }),
+    [reportFirstInteraction],
+  );
 
   const submitWithDrafts = useCallback(
     (nextDrafts: DraftState) => {
@@ -468,12 +503,11 @@ function ElicitationDialogContent({
   );
 
   const advanceFromQuestion = useCallback(
-    (nextDrafts: DraftState, explicitSubmit = false) => {
+    (nextDrafts: DraftState) => {
       if (responding) return;
       if (getElicitationQuestionAdvanceKind(questions, questionIndex) === "submit") {
-        // 末题选择只是编辑草稿。先聚焦提交，避免选择/裸 Enter 隐式发出回答。
-        if (isPlanApproval || explicitSubmit) submitWithDrafts(nextDrafts);
-        else focusSubmit();
+        // 恢复上游推进规则：末题确认直接提交同一份最新草稿。
+        submitWithDrafts(nextDrafts);
         return;
       }
       const nextIndex = questionIndex + 1;
@@ -482,7 +516,7 @@ function ElicitationDialogContent({
       // Plan mode 切题后默认聚焦第一项，与普通问答的"不预选"策略区分。
       setActiveOptionIndex(isPlanApproval && preferred < 0 ? 0 : preferred);
     },
-    [questionIndex, questions, submitWithDrafts, isPlanApproval, focusSubmit, responding],
+    [questionIndex, questions, submitWithDrafts, isPlanApproval, responding],
   );
 
   const selectOption = useCallback(
@@ -539,8 +573,16 @@ function ElicitationDialogContent({
     if (responding) return;
     reportFirstInteraction("navigation");
     if (isPlanApproval) onRespond(request.requestId, "decline");
-    else onDefer?.();
-  }, [isPlanApproval, onDefer, onRespond, reportFirstInteraction, request.requestId, responding]);
+    else setExpanded(!isDialogExpanded);
+  }, [
+    isDialogExpanded,
+    isPlanApproval,
+    onRespond,
+    reportFirstInteraction,
+    request.requestId,
+    responding,
+    setExpanded,
+  ]);
 
   const skip = useCallback(() => {
     if (responding || isPlanApproval) return;
@@ -597,7 +639,7 @@ function ElicitationDialogContent({
     if (nextDrafts !== drafts) {
       setDrafts(nextDrafts);
     }
-    advanceFromQuestion(nextDrafts, true);
+    advanceFromQuestion(nextDrafts);
   }, [
     advanceFromQuestion,
     currentQuestion,
@@ -659,7 +701,7 @@ function ElicitationDialogContent({
         case "Enter":
           event.preventDefault();
           if (activeOptionIndex < 0) return;
-          // 多选题 Space 勾选，Enter 推进；末题 Enter 只聚焦提交。
+          // 多选题 Space 勾选，Enter 推进；末题直接提交。
           if (currentQuestion?.multiSelect) {
             advanceFromQuestion(drafts);
           } else if (activeOptionIndex < currentQuestion.options.length) {
@@ -703,6 +745,7 @@ function ElicitationDialogContent({
       const action = resolveElicitationCustomInputKeyAction({
         key: event.key,
         advanceKind: getElicitationQuestionAdvanceKind(questions, questionIndex),
+        shiftKey: event.shiftKey,
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
         compositionActive: customInputCompositionActiveRef.current,
@@ -719,6 +762,11 @@ function ElicitationDialogContent({
         // 原因：空自定义输入框也允许用 Enter / Esc 切题；这仍是明确的题目导航，
         // 不能因为没有触发 onChange 就继续保留自动结束 deadline。
         reportFirstInteraction("navigation");
+      }
+      if (action === "advance") {
+        event.preventDefault();
+        advanceFromQuestion(drafts);
+        return;
       }
       if (action === "submit") {
         event.preventDefault();
@@ -765,7 +813,8 @@ function ElicitationDialogContent({
           })
         : option.description;
     return (
-      <button
+      <Button
+        variant="ghost"
         key={option.value}
         ref={(node) => {
           optionRefs.current[index] = node;
@@ -780,8 +829,8 @@ function ElicitationDialogContent({
         onFocus={() => setActiveOptionIndex(index)}
         onKeyDown={handleOptionKeyDown}
         className={cn(
-          "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left outline-none transition-colors focus-visible:bg-hover",
-          isSelected ? "bg-selected" : isActive ? "bg-hover" : "hover:bg-hover",
+          "flex h-auto w-full items-center justify-start gap-3 rounded-xl border-0 px-3 py-2 text-left whitespace-normal outline-none transition-colors focus-visible:bg-hover",
+          isSelected ? "bg-selected hover:bg-selected" : isActive ? "bg-hover" : "hover:bg-hover",
         )}
       >
         {question.multiSelect ? (
@@ -824,7 +873,7 @@ function ElicitationDialogContent({
             </span>
           ) : null}
         </span>
-      </button>
+      </Button>
     );
   };
 
@@ -838,7 +887,7 @@ function ElicitationDialogContent({
         role={question.multiSelect ? "checkbox" : undefined}
         aria-checked={question.multiSelect ? isSelected : undefined}
         onClick={(event) => {
-          if (event.target !== customInputRef.current) {
+          if (!responding && event.target !== customInputRef.current) {
             customInputRef.current?.focus();
           }
         }}
@@ -900,7 +949,7 @@ function ElicitationDialogContent({
   const canGoNextPage = questions.length > 0 && questionIndex < questions.length - 1;
 
   // 卡片初次取焦点；方向键进入选项，Tab 保留浏览器自然顺序以到达页脚。
-  // 普通末题的 Enter 只聚焦提交按钮，审批仍保留独立的明确批准动作。
+  // 末题 Enter 提交，审批仍保留独立的明确批准动作。
   const handleCardKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
       if (event.target !== event.currentTarget || responding || isImeComposingKeyEvent(event))
@@ -979,6 +1028,7 @@ function ElicitationDialogContent({
         data-elicitation-countdown-seconds={countdownSeconds}
         aria-label={stopCountdownLabel}
         title={stopCountdownLabel}
+        disabled={responding}
         onClick={() => reportFirstInteraction("countdown")}
         className="min-w-10 px-1.5 tabular-nums text-foreground-subtle"
       >
@@ -994,7 +1044,7 @@ function ElicitationDialogContent({
       {/* Bugfix: 手机远控视口较短，长问题和多选项会把按钮顶出弹窗；卡片限高后让内容区内部滚动。 */}
       <div
         ref={cardRef}
-        tabIndex={activeOptionIndex < 0 ? 0 : -1}
+        tabIndex={0}
         data-elicitation-dialog-card="true"
         aria-busy={responding}
         className="relative z-1 flex w-full max-h-[min(72dvh,42rem)] flex-col overflow-hidden rounded-2xl border border-border bg-popover shadow-xs outline-none"
@@ -1026,7 +1076,7 @@ function ElicitationDialogContent({
             data-elicitation-dialog-body="true"
             className={cn(
               "flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain pr-1",
-              !isDialogExpanded ? "max-md:hidden" : undefined,
+              !isDialogExpanded ? "hidden" : undefined,
             )}
           >
             <div className="flex items-start justify-between gap-3">
@@ -1060,6 +1110,7 @@ function ElicitationDialogContent({
                     aria-expanded={isQuestionExpanded}
                     aria-label={questionCollapseLabel}
                     title={questionCollapseLabel}
+                    disabled={responding}
                     onClick={() => setIsQuestionExpanded((expanded) => !expanded)}
                     className="mt-2 hidden max-md:inline-flex"
                   >
@@ -1081,8 +1132,8 @@ function ElicitationDialogContent({
                   aria-expanded={isDialogExpanded}
                   aria-label={dialogCollapseLabel}
                   title={dialogCollapseLabel}
-                  onClick={() => setIsDialogExpanded((expanded) => !expanded)}
-                  className="hidden max-md:inline-flex"
+                  disabled={responding}
+                  onClick={() => setExpanded(!isDialogExpanded)}
                 >
                   {isDialogExpanded ? (
                     <ChevronDown className="size-3" />
@@ -1094,7 +1145,7 @@ function ElicitationDialogContent({
                   type="button"
                   size="icon-xs"
                   variant="ghost"
-                  disabled={!canGoPreviousPage}
+                  disabled={responding || !canGoPreviousPage}
                   title={intl.formatMessage({
                     id: "chat.elicitation.previousQuestion",
                   })}
@@ -1112,7 +1163,7 @@ function ElicitationDialogContent({
                   type="button"
                   size="icon-xs"
                   variant="ghost"
-                  disabled={!canGoNextPage}
+                  disabled={responding || !canGoNextPage}
                   title={intl.formatMessage({
                     id: "chat.elicitation.nextQuestion",
                   })}
@@ -1147,12 +1198,8 @@ function ElicitationDialogContent({
           </div>
 
           {!isDialogExpanded ? (
-            <div className="hidden min-w-0 items-center justify-between gap-2 max-md:flex">
-              <button
-                type="button"
-                onClick={() => setIsDialogExpanded(true)}
-                className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-0.5 text-left text-ui-base font-medium text-foreground hover:bg-hover"
-              >
+            <div className="flex min-w-0 items-center justify-between gap-2">
+              <span className="flex min-w-0 flex-1 items-center gap-2 text-ui-base font-medium text-foreground">
                 {titleHeader ? (
                   <Badge
                     variant="outline"
@@ -1162,8 +1209,7 @@ function ElicitationDialogContent({
                   </Badge>
                 ) : null}
                 <span className="min-w-0 flex-1 truncate">{titleQuestion}</span>
-              </button>
-              {countdownButton}
+              </span>
               <span className="shrink-0 text-ui-base font-medium text-foreground-subtlest">
                 {`${Math.min(questionIndex + 1, Math.max(questions.length, 1))} / ${Math.max(questions.length, 1)}`}
               </span>
@@ -1174,14 +1220,15 @@ function ElicitationDialogContent({
                 aria-expanded={isDialogExpanded}
                 aria-label={dialogCollapseLabel}
                 title={dialogCollapseLabel}
-                onClick={() => setIsDialogExpanded(true)}
+                disabled={responding}
+                onClick={() => setExpanded(true)}
               >
                 <ChevronUp className="size-3" />
               </Button>
             </div>
           ) : null}
 
-          {responseError ? (
+          {responseError && isDialogExpanded ? (
             <p role="alert" className="px-1 text-ui-base text-destructive">
               {responseError}
             </p>
@@ -1190,7 +1237,7 @@ function ElicitationDialogContent({
             data-elicitation-dialog-footer="true"
             className={cn(
               "flex shrink-0 items-center justify-between gap-2 px-1 max-sm:flex-wrap",
-              !isDialogExpanded ? "max-md:hidden" : undefined,
+              !isDialogExpanded ? "hidden" : undefined,
             )}
           >
             <p className="flex min-w-0 flex-1 items-center gap-2 text-ui-base text-foreground-subtle max-sm:basis-full">
@@ -1216,20 +1263,18 @@ function ElicitationDialogContent({
                   {intl.formatMessage({ id: "chat.elicitation.skipOnce" })}
                 </Button>
               ) : null}
+              {isPlanApproval ? (
+                <Button
+                  type="button"
+                  size="lg"
+                  variant="outline"
+                  disabled={responding}
+                  onClick={dismiss}
+                >
+                  {intl.formatMessage({ id: "chat.elicitation.dismiss" })}
+                </Button>
+              ) : null}
               <Button
-                type="button"
-                size="lg"
-                variant="outline"
-                disabled={responding}
-                data-elicitation-defer="true"
-                onClick={dismiss}
-              >
-                {intl.formatMessage({
-                  id: isPlanApproval ? "chat.elicitation.dismiss" : "chat.elicitation.answerLater",
-                })}
-              </Button>
-              <Button
-                ref={submitButtonRef}
                 type="button"
                 size="lg"
                 data-elicitation-submit="true"

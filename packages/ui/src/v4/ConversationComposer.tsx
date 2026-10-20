@@ -1,10 +1,10 @@
 /* oxlint-disable eslint(max-lines) -- composer 集中收口输入区 wiring（附件/草稿/历史/mention），拆分会打散收口粒度。 */
 import { FollowupPreview } from "@/v4/composer/FollowupPreview.js";
 import {
-  WorkTaskStartDialog,
+  WorkTaskBrief,
   EMPTY_WORK_TASK_START,
-  formatWorkTaskStartPrompt,
-} from "@/v4/composer/WorkTaskStartDialog.js";
+  formatWorkTaskBriefPrompt,
+} from "@/v4/composer/WorkTaskBrief.js";
 import type { FollowupSuggestion } from "@/v4/followupSuggestions.js";
 import { getComposerDraftRevision } from "@/v4/composer/composerDraftRevision.js";
 import { getLocalTtftObserver } from "@/v4/telemetry/localTtftObserver.js";
@@ -27,12 +27,14 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type DragEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { cn } from "@/components/lib/utils.js";
 import { HighspeedComposerBackground } from "@/highspeed/HighspeedActivationVisual.js";
@@ -64,6 +66,7 @@ import {
   ArrowUpIcon,
   ClipboardPenLineIcon,
   InfoIcon,
+  ListChecks,
   RotateCcwIcon,
   SquareIcon,
   XIcon,
@@ -388,7 +391,7 @@ export interface ConversationComposerProps {
   draftMode?: boolean;
   /** UI Work/Chat classification, independent from permission/submission mode. */
   workMode?: boolean;
-  workTaskStartConfirmationEnabled?: boolean;
+  workTaskBriefEnabled?: boolean;
   followupSuggestions?: readonly FollowupSuggestion[];
   followupSuggestionsEnabled?: boolean;
   /** renderer 当前草稿配置意图；只在 draftMode 下覆盖迟到的 prewarm projection。 */
@@ -417,6 +420,8 @@ export interface ConversationComposerProps {
    * v4 bottom dock 阻塞交互 id。存在时 composer 只隐藏不卸载，保留草稿、附件与编辑器实例。
    */
   blockingRequestId?: string | null;
+  /** 本 pane 的交互卡片边界，只用于 pending 结束后的焦点归还。 */
+  interactionFocusBoundaryRef?: RefObject<HTMLDivElement | null>;
   disabled?: boolean;
   /** 当前 Task 可用的 Highspeed 卡；只影响静态标识和模型锁定。 */
   highspeedCard?: HighspeedCardSnapshot | null;
@@ -528,7 +533,7 @@ function ConversationComposerImpl({
   skillCatalogSessionId = sessionId,
   draftMode = false,
   workMode = false,
-  workTaskStartConfirmationEnabled = true,
+  workTaskBriefEnabled = true,
   followupSuggestions = [],
   followupSuggestionsEnabled = true,
   draftConfig,
@@ -542,6 +547,7 @@ function ConversationComposerImpl({
   contextHeader,
   centered = false,
   blockingRequestId = null,
+  interactionFocusBoundaryRef,
   disabled = false,
   highspeedCard = null,
   highspeedActivationCardId = null,
@@ -601,30 +607,12 @@ function ConversationComposerImpl({
   const [pending, setPending] = useState(false);
   const currentScopeKeyRef = useRef(configPickerScopeKey);
   currentScopeKeyRef.current = configPickerScopeKey;
-  const currentConfigurationKey = JSON.stringify([
-    draftMode,
-    workMode,
-    draftConfig?.mode ?? composerDraft?.mode,
-    draftConfig?.planEnabled ?? composerDraft?.planEnabled,
-    draftConfig?.modelSelection ?? composerDraft?.modelSelection,
-  ]);
-  const currentConfigurationKeyRef = useRef(currentConfigurationKey);
-  currentConfigurationKeyRef.current = currentConfigurationKey;
   const composingRef = useRef(false);
-  const [heldWorkTaskStart, setHeldWorkTaskStart] = useState<{
-    scopeKey: string;
-    revision: number;
-    signature: string;
-    configurationKey: string;
-    goal: string;
-    requestedDelivery?: "startNow" | "queue" | "guide";
-  } | null>(null);
+  const [briefExpanded, setBriefExpanded] = useState(false);
   useEffect(() => {
     composingRef.current = false;
+    setBriefExpanded(false);
   }, [configPickerScopeKey]);
-  const confirmedWorkTaskStartRef = useRef<
-    (NonNullable<typeof heldWorkTaskStart> & { taskStartKey: string }) | null
-  >(null);
   const suggestionAcceptanceRef = useRef<{
     scopeKey: string;
     revision: number;
@@ -710,6 +698,7 @@ function ConversationComposerImpl({
   const activeShareContext = resolveAttachableShareContext(snapshot?.sharedContextImport);
   const pendingShareContext = activeShareContext?.status === "pending" ? activeShareContext : null;
   const inputApiRef = useRef<LexicalChatInputHandle | null>(null);
+  const composerElementRef = useRef<HTMLDivElement | null>(null);
   const reportedErrorKeysRef = useRef(new Set<string>());
   const isMobileTextInputViewport = useIsMobileTextInputViewport();
   const primaryModifierPressed = usePrimaryFollowupModifier();
@@ -922,6 +911,18 @@ function ConversationComposerImpl({
     (state) => state.getWorkspaceState(workspacePath, workspaceIdentity).draftFocusVersion,
   );
   const pendingFocusRef = useRef(false);
+  const focusRequestRevisionRef = useRef(0);
+  const interactionFocusOwnedRef = useRef(false);
+  const focusBoundaryStateRef = useRef({
+    scopeKey: configPickerScopeKey,
+    blockingRequestId,
+    interactionFocusBoundaryRef,
+  });
+  focusBoundaryStateRef.current = {
+    scopeKey: configPickerScopeKey,
+    blockingRequestId,
+    interactionFocusBoundaryRef,
+  };
   // 本次 focus 是否由程序触发（见 flushPendingFocus），供 send_input_focus 过滤非用户动作。
   const programmaticFocusRef = useRef(false);
   // 发送键与 Enter 共用同一个 form submit；按钮 onClick 早于 submit 触发，
@@ -935,34 +936,128 @@ function ConversationComposerImpl({
   // 触发多余的草稿重恢复（disabled 变化本不应重放草稿）。
   const focusOptsRef = useRef<ComposerAutoFocusOptions>({
     autoFocusEnabled,
-    disabled,
+    disabled: disabled || blockingRequestId !== null,
     isMobileViewport: isMobileTextInputViewport,
   });
   focusOptsRef.current = {
     autoFocusEnabled,
-    disabled,
+    disabled: disabled || blockingRequestId !== null,
     isMobileViewport: isMobileTextInputViewport,
   };
   const flushPendingFocus = useCallback(() => {
     if (!pendingFocusRef.current) return;
     if (resolveComposerAutoFocus(focusOptsRef.current) !== "focus-now") return;
     if (!inputApiRef.current) return;
-    pendingFocusRef.current = false;
-    // 程序性聚焦与用户点击输入框会触发同一个 DOM focus 事件；置位后由 handleEditorFocus
-    // 消费，避免把「切会话 / 挂载回焦 / 上下文块移除后回焦」误报成 send_input_focus。
-    programmaticFocusRef.current = true;
+    const requestedScope = focusBoundaryStateRef.current.scopeKey;
+    const requestedRevision = focusRequestRevisionRef.current;
+    const applyFocus = () => {
+      // 隐藏的 composer 保留挂载；排帧期间也可能出现新问题、换 pane 或转移焦点。
+      // 必须在真正聚焦这一拍重验，不能让旧挂载/草稿恢复请求绕过交互卡片。
+      if (
+        !pendingFocusRef.current ||
+        requestedRevision !== focusRequestRevisionRef.current ||
+        requestedScope !== focusBoundaryStateRef.current.scopeKey ||
+        resolveComposerAutoFocus(focusOptsRef.current) !== "focus-now" ||
+        document.visibilityState === "hidden" ||
+        composerElementRef.current?.isConnected === false ||
+        composerElementRef.current?.checkVisibility?.() === false
+      )
+        return;
+      pendingFocusRef.current = false;
+      // 程序性聚焦不计入用户点击输入框埋点。
+      programmaticFocusRef.current = true;
+      inputApiRef.current?.focus();
+    };
     // Lexical root 可能晚一帧就绪，聚焦排到下一帧（与草稿回填同款时序）。
     if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(() => inputApiRef.current?.focus());
+      requestAnimationFrame(applyFocus);
     } else {
-      inputApiRef.current.focus();
+      applyFocus();
     }
   }, []);
   const requestComposerFocus = useCallback(() => {
-    if (resolveComposerAutoFocus(focusOptsRef.current) === "skip") return;
+    if (
+      resolveComposerAutoFocus(focusOptsRef.current) === "skip" ||
+      focusBoundaryStateRef.current.blockingRequestId !== null ||
+      document.visibilityState === "hidden"
+    )
+      return;
+    focusRequestRevisionRef.current += 1;
     pendingFocusRef.current = true;
     flushPendingFocus();
   }, [flushPendingFocus]);
+
+  const cancelComposerFocus = useCallback(() => {
+    interactionFocusOwnedRef.current = false;
+    pendingFocusRef.current = false;
+    focusRequestRevisionRef.current += 1;
+  }, []);
+  useLayoutEffect(() => {
+    const isOwnFocusTarget = (target: EventTarget | null) =>
+      target instanceof Node &&
+      (composerElementRef.current?.contains(target) ||
+        (focusBoundaryStateRef.current.blockingRequestId !== null &&
+          focusBoundaryStateRef.current.interactionFocusBoundaryRef?.current?.contains(target)));
+    const handleFocusIn = (event: FocusEvent) => {
+      if (
+        isOwnFocusTarget(event.target) &&
+        focusOptsRef.current.autoFocusEnabled &&
+        document.visibilityState !== "hidden"
+      ) {
+        interactionFocusOwnedRef.current = true;
+      } else {
+        cancelComposerFocus();
+      }
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      // 点击空白处未必产生 focusin；用户已离开此卡片时也应撤销焦点归还。
+      if (!isOwnFocusTarget(event.target)) cancelComposerFocus();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") cancelComposerFocus();
+    };
+    document.addEventListener("focusin", handleFocusIn);
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("blur", cancelComposerFocus);
+    return () => {
+      cancelComposerFocus();
+      document.removeEventListener("focusin", handleFocusIn);
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("blur", cancelComposerFocus);
+    };
+  }, [cancelComposerFocus]);
+
+  const previousFocusBoundaryRef = useRef({
+    scopeKey: configPickerScopeKey,
+    blockingRequestId,
+  });
+  useLayoutEffect(() => {
+    const previous = previousFocusBoundaryRef.current;
+    previousFocusBoundaryRef.current = { scopeKey: configPickerScopeKey, blockingRequestId };
+    if (
+      previous.scopeKey !== configPickerScopeKey ||
+      !autoFocusEnabled ||
+      document.visibilityState === "hidden"
+    ) {
+      cancelComposerFocus();
+      return;
+    }
+    if (blockingRequestId !== null) {
+      // 进入或切换问题时取消旧编辑器聚焦帧，但保留本 pane 已拥有的焦点归属。
+      pendingFocusRef.current = false;
+      focusRequestRevisionRef.current += 1;
+    } else if (previous.blockingRequestId !== null && interactionFocusOwnedRef.current) {
+      requestComposerFocus();
+    }
+  }, [
+    autoFocusEnabled,
+    blockingRequestId,
+    cancelComposerFocus,
+    configPickerScopeKey,
+    requestComposerFocus,
+  ]);
 
   const handleCodeCommentRemoved = useCallback(
     (comment: Parameters<typeof removeCodeCommentPreview>[0]) => {
@@ -1076,6 +1171,11 @@ function ConversationComposerImpl({
 
     const draft = transferredDraft ?? composerDraft;
     const restoreRevision = contentRevisionRef.current;
+    const restoreFocusRevision = focusRequestRevisionRef.current;
+    const restoreFocusAllowed =
+      resolveComposerAutoFocus(focusOptsRef.current) !== "skip" &&
+      focusBoundaryStateRef.current.blockingRequestId === null &&
+      document.visibilityState !== "hidden";
     const restoreDraftInto = (api: LexicalChatInputHandle) => {
       if (!draft) {
         if (textRef.current) {
@@ -1114,7 +1214,13 @@ function ConversationComposerImpl({
         return;
       restoreDraftInto(api);
       // 草稿恢复后把光标交还输入框（切会话/切草稿/挂载）；连接中会话待可编辑后兑现。
-      if (targetChanged || composerDraftRestoreRevision === 0) requestComposerFocus();
+      // 恢复正文和恢复焦点是不同意图；等待 root 就绪期间，问题卡/外部导航可撤销后者。
+      if (
+        (targetChanged || composerDraftRestoreRevision === 0) &&
+        restoreFocusAllowed &&
+        focusRequestRevisionRef.current === restoreFocusRevision
+      )
+        requestComposerFocus();
     };
     // Lexical root 可能晚一帧就绪；draft 恢复排到下一帧（与旧 initialValue 回填同款时序）。
     if (typeof requestAnimationFrame === "function") {
@@ -1249,7 +1355,6 @@ function ConversationComposerImpl({
       expectedHeldQueueItemIds?: readonly string[],
       existingTelemetrySeed?: ConversationPromptTelemetrySeed,
       requestedDelivery?: "startNow" | "queue" | "guide",
-      confirmedWorkTaskStart?: NonNullable<typeof heldWorkTaskStart>,
     ) => {
       const trimmed = textRef.current.trim();
       const submittedQueueItemIds =
@@ -1291,71 +1396,6 @@ function ConversationComposerImpl({
       ) {
         return;
       }
-      const workTaskSignature = JSON.stringify({
-        workMode,
-        draftMode,
-        mode: submission?.mode ?? draftConfig?.mode ?? composerDraft?.mode,
-        planEnabled:
-          submission?.planEnabled ?? draftConfig?.planEnabled ?? composerDraft?.planEnabled,
-        selection: submission?.modelSelection ?? composerDraft?.modelSelection,
-        attachments: submittedAttachmentIds,
-        shareContext: submittedShareContext?.contextId,
-        contexts: [
-          currentCodeCommentContexts,
-          currentWebElementContexts,
-          currentPluginUiContexts,
-          currentPptxElementReferences,
-          currentConversationSelections,
-        ],
-      });
-      const previousConfirmation = confirmedWorkTaskStartRef.current;
-      if (
-        !confirmedWorkTaskStart &&
-        previousConfirmation &&
-        previousConfirmation.scopeKey === currentScopeKeyRef.current &&
-        previousConfirmation.revision === contentRevisionRef.current &&
-        previousConfirmation.signature === workTaskSignature &&
-        previousConfirmation.configurationKey === currentConfigurationKeyRef.current &&
-        previousConfirmation.taskStartKey === JSON.stringify(submittedDraft.taskStart)
-      ) {
-        // 显式重试复用同一意图的启动确认；它不重放或替代命令层 admission/对账。
-        confirmedWorkTaskStart = previousConfirmation;
-      }
-      if (
-        confirmedWorkTaskStart &&
-        (confirmedWorkTaskStart.scopeKey !== currentScopeKeyRef.current ||
-          confirmedWorkTaskStart.revision !== contentRevisionRef.current ||
-          confirmedWorkTaskStart.signature !== workTaskSignature ||
-          confirmedWorkTaskStart.configurationKey !== currentConfigurationKeyRef.current ||
-          !draftMode ||
-          !workMode)
-      ) {
-        setHeldWorkTaskStart(null);
-        return;
-      }
-      if (
-        draftMode &&
-        workMode &&
-        workTaskStartConfirmationEnabled &&
-        !heldQueueDisposition &&
-        !confirmedWorkTaskStart
-      ) {
-        setHeldWorkTaskStart({
-          scopeKey: configPickerScopeKey,
-          revision: contentRevisionRef.current,
-          signature: workTaskSignature,
-          configurationKey: currentConfigurationKeyRef.current,
-          goal: textRef.current,
-          ...(requestedDelivery ? { requestedDelivery } : {}),
-        });
-        return;
-      }
-      if (confirmedWorkTaskStart)
-        confirmedWorkTaskStartRef.current = {
-          ...confirmedWorkTaskStart,
-          taskStartKey: JSON.stringify(submittedDraft.taskStart),
-        };
-      setHeldWorkTaskStart(null);
       const sendAction = startUserAction({
         featureId: "conversation.composer.message",
         action: "send",
@@ -1441,9 +1481,6 @@ function ConversationComposerImpl({
             inputApiRef.current?.setText(submittedDraft.text);
           }
           updateText(submittedDraft.text);
-          const confirmation = confirmedWorkTaskStartRef.current;
-          if (confirmation?.scopeKey === submittedScopeKey)
-            confirmation.revision = contentRevisionRef.current;
           editorClearedOptimistically = false;
         }
       };
@@ -1489,7 +1526,11 @@ function ConversationComposerImpl({
         // inputIntent.sharedContextRefs 注入，与正文无关。
         const promptText = serializeComposerPromptContexts(
           draftMode && workMode
-            ? formatWorkTaskStartPrompt(trimmed, submittedDraft.taskStart)
+            ? formatWorkTaskBriefPrompt(trimmed, submittedDraft.taskStart, {
+                outcome: intl.formatMessage({ id: "chat.workBrief.outcome.prefix" }),
+                deliverable: intl.formatMessage({ id: "chat.workBrief.deliverable.prefix" }),
+                constraints: intl.formatMessage({ id: "chat.workBrief.constraints.prefix" }),
+              })
             : trimmed,
           {
             codeComments: currentCodeCommentContexts,
@@ -1623,8 +1664,6 @@ function ConversationComposerImpl({
         // 发送成功：清本次提交捕获的 scope 草稿；prompt history 已在真实发送前同步写盘，
         // 避免首发 promote 丢失或误清 promotion 后的新 scope。
         finalizeSubmittedDraft();
-        if (confirmedWorkTaskStartRef.current?.scopeKey === submittedScopeKey)
-          confirmedWorkTaskStartRef.current = null;
         sendAction.complete({ resultSource: "authority_ack", admissionResult: "accepted" });
       } catch (error) {
         rollbackPromptHistory();
@@ -1653,7 +1692,7 @@ function ConversationComposerImpl({
       disabled,
       draftMode,
       workMode,
-      workTaskStartConfirmationEnabled,
+      intl,
       conversationSelectionReferences,
       conversationTelemetry,
       draftConfig,
@@ -1682,18 +1721,6 @@ function ConversationComposerImpl({
       workspacePath,
     ],
   );
-
-  useEffect(() => {
-    if (
-      heldWorkTaskStart &&
-      (heldWorkTaskStart.scopeKey !== configPickerScopeKey ||
-        heldWorkTaskStart.revision !== contentRevisionRef.current ||
-        heldWorkTaskStart.configurationKey !== currentConfigurationKeyRef.current ||
-        !draftMode ||
-        !workMode)
-    )
-      setHeldWorkTaskStart(null);
-  }, [configPickerScopeKey, currentConfigurationKey, draftMode, heldWorkTaskStart, text, workMode]);
 
   const prepareSuggestionAcceptance = useCallback(() => {
     suggestionAcceptanceRef.current = {
@@ -2205,7 +2232,9 @@ function ConversationComposerImpl({
                     </span>
                   ) : null}
                   {attachment.uploadStatus === "failed" ? (
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
                       type="button"
                       data-testid={testId(TID_V4_ATTACHMENT_UPLOAD_RETRY, attachment.id)}
                       aria-label={intl.formatMessage({
@@ -2220,7 +2249,7 @@ function ConversationComposerImpl({
                       }}
                     >
                       <RotateCcwIcon className="size-3" />
-                    </button>
+                    </Button>
                   ) : null}
                   <Button
                     type="button"
@@ -2468,6 +2497,22 @@ function ConversationComposerImpl({
           isWebRemoteControl={isWebRemoteControl}
           currentSessionBusy={canStop}
         />
+        {draftMode && workMode && workTaskBriefEnabled ? (
+          <ControlHintTooltip title={intl.formatMessage({ id: "chat.workBrief.title" })}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={intl.formatMessage({ id: "chat.workBrief.title" })}
+              aria-expanded={briefExpanded}
+              data-testid="work-task-brief-toggle"
+              disabled={disabled || pending}
+              onClick={() => setBriefExpanded((value) => !value)}
+            >
+              <ListChecks className="size-4" />
+            </Button>
+          </ControlHintTooltip>
+        ) : null}
         <ConversationBackgroundWorkTrigger
           backgroundWorks={snapshot?.backgroundWorks ?? []}
           runningSubagentCount={runningSubagentCount}
@@ -2478,6 +2523,12 @@ function ConversationComposerImpl({
     ),
     [
       activeConfigPicker,
+      briefExpanded,
+      draftMode,
+      workMode,
+      workTaskBriefEnabled,
+      intl,
+      pending,
       canStop,
       disabled,
       draftConfig,
@@ -2508,6 +2559,7 @@ function ConversationComposerImpl({
     // 视觉上会被误认为输入卡标题栏；将 surface 边界收窄到工作区头和编辑器后，桌面与手机
     // Web 仍共享同一 DOM 顺序，同时恢复错误提示与输入卡之间的独立层级。
     <div
+      ref={composerElementRef}
       data-testid={TID_V4_COMPOSER}
       data-input-routing={mode}
       onCompositionStartCapture={(event) => {
@@ -2543,7 +2595,7 @@ function ConversationComposerImpl({
           textRef.current.trim() ||
           !target.isContentEditable ||
           document.activeElement !== target ||
-          document.querySelector('[data-trigger] [role="listbox"]')
+          inputApiRef.current?.isCompletionMenuOpen?.()
         )
           return;
         const suggestion = followupSuggestions[0];
@@ -2554,7 +2606,7 @@ function ConversationComposerImpl({
       aria-hidden={isBlockedByInteraction ? true : undefined}
       style={isBlockedByInteraction ? { display: "none" } : undefined}
       className={cn(
-        "chat-composer-region z-20 w-full shrink-0 @container/composer",
+        "chat-composer-region relative z-20 w-full shrink-0 @container/composer",
         centered && "max-w-2xl",
       )}
     >
@@ -2579,7 +2631,7 @@ function ConversationComposerImpl({
           />
         </div>
       ) : null}
-      {followupSuggestionsEnabled && followupSuggestions.length > 0 ? (
+      {followupSuggestionsEnabled && followupSuggestions.length > 0 && !text.trim() ? (
         <FollowupPreview
           suggestions={followupSuggestions}
           canAccept={!text.trim() && !disabled && mode !== "reject" && !pending && autoFocusEnabled}
@@ -2649,7 +2701,20 @@ function ConversationComposerImpl({
           // @ 是 Plugin / 文件 / 对话 / 画板主入口；# 会话与 $ / ¥ / ￥ Skills
           // 仍由 MentionPlugin 保留兼容触发，但不在 + 菜单重复展示。
           showMentionButton
-          topContent={topContentNode}
+          topContent={
+            <>
+              {topContentNode}
+              {draftMode && workMode && briefExpanded ? (
+                <WorkTaskBrief
+                  fields={composerDraft?.taskStart ?? EMPTY_WORK_TASK_START}
+                  disabled={disabled || pending}
+                  onChange={(taskStart) =>
+                    updateComposerContent({ ...snapshotDraftOfEditor(), taskStart })
+                  }
+                />
+              ) : null}
+            </>
+          }
           attachmentAction={attachmentAction}
           inputTestId={TID_V4_COMPOSER_INPUT}
           inputApiRef={inputApiRef}
@@ -2682,34 +2747,6 @@ function ConversationComposerImpl({
           </p>
         ) : null}
       </div>
-      <WorkTaskStartDialog
-        open={heldWorkTaskStart !== null}
-        goal={heldWorkTaskStart?.goal ?? ""}
-        attachmentNames={attachmentsApi.attachments.map((attachment) => attachment.filename)}
-        imagePreviews={attachmentsApi.attachments.flatMap((attachment) =>
-          attachment.objectUrl && isImageChatComposerAttachment(attachment)
-            ? [{ id: attachment.id, src: attachment.objectUrl, filename: attachment.filename }]
-            : [],
-        )}
-        fields={composerDraft?.taskStart ?? EMPTY_WORK_TASK_START}
-        onFieldsChange={(taskStart) =>
-          updateComposerContent({ ...snapshotDraftOfEditor(), taskStart })
-        }
-        onCancel={() => {
-          setHeldWorkTaskStart(null);
-          requestComposerFocus();
-        }}
-        onConfirm={() => {
-          if (!heldWorkTaskStart) return;
-          void submit(
-            undefined,
-            undefined,
-            undefined,
-            heldWorkTaskStart.requestedDelivery,
-            heldWorkTaskStart,
-          );
-        }}
-      />
       <ImagePreviewDialog
         initialIndex={attachmentPreviewIndex}
         items={composerMediaPreviewItems}

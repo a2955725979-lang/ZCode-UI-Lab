@@ -216,6 +216,14 @@ describe("ContextBuilder meta user context", () => {
         "- file should be an absolute path or include the workspace folder segment so it can be resolved relative to the workspace.",
         "- Keep line ranges tight; end defaults to start.",
         '- Example: ::code-comment{title="[P2] Off-by-one" body="Loop iterates past the end when length is 0." file="/path/to/foo.ts" start=10 end=11 priority=2}',
+        "",
+        "### Follow-up suggestions",
+        '- After your final reply is complete, you may add up to three suggested next messages for the user, one directive per line at the very end of the reply: ::next-prompt{label="..." prompt="..."}',
+        "- prompt is the exact message the user could send next, written in the user's language and from the user's point of view. label is a short title for it (at most 24 characters, or 12 CJK characters).",
+        "- Suggest only concrete next steps grounded in this conversation. Emit none when there is no useful follow-up, when you are asking the user a question, or when the turn ended in an error.",
+        "- These are optional suggestions for the user, not work you have promised; they do not count as an unfinished plan.",
+        '- Put nothing after the directives. Never use the directive inside code blocks, quotes, lists or examples, and never mention it in prose. Escape double quotes inside values as \\\" and keep each directive on a single line.',
+        '- Example: ::next-prompt{label="Run the tests" prompt="Run the full test suite and fix any failures."}',
       ].join("\n"),
     );
 
@@ -233,6 +241,67 @@ describe("ContextBuilder meta user context", () => {
     expect(result.systemMessages[2]?.content).not.toContain("# ZCode Desktop Context");
   });
 
+  it("injects only the shared stable follow-up guidance for independently hosted Web", () => {
+    const result = createContextBuilder({
+      workingDirectory: "/workspace",
+      presentationSurface: "zcode_web",
+      genUiOutputDirectory: "/visualizations/test",
+      envInfo: {
+        cwd: "/workspace",
+        platform: "linux",
+        shell: "bash",
+        osVersion: "Linux",
+        nodeVersion: "v24",
+      },
+    }).build();
+    const desktop = createContextBuilder({
+      workingDirectory: "/workspace",
+      presentationSurface: "zcode_desktop",
+      envInfo: {
+        cwd: "/workspace",
+        platform: "linux",
+        shell: "bash",
+        osVersion: "Linux",
+        nodeVersion: "v24",
+      },
+    })
+      .build()
+      .sections.find((section) => section.source === "desktop_context")!;
+    const guidance = result.sections.find((section) => section.source === "followup_suggestions");
+    expect(guidance).toMatchObject({
+      name: "Follow-up Suggestions",
+      cacheHint: "stable",
+      injectionTarget: "system",
+    });
+    expect(guidance?.content).toBe(
+      desktop.content.slice(desktop.content.indexOf("### Follow-up suggestions")),
+    );
+    const system = result.systemMessages.map((message) => String(message.content)).join("\n");
+    expect(system).toContain("::next-prompt");
+    expect(system).not.toContain("ZCode Desktop Context");
+    expect(system).not.toContain("### Interactive views");
+    expect(system).not.toContain("/visualizations/test");
+    for (const excluded of [{ workflowActor: {} }, { customSystemPrompt: "Custom prompt" }]) {
+      const excludedResult = createContextBuilder({
+        workingDirectory: "/workspace",
+        envInfo: {
+          cwd: "/workspace",
+          platform: "linux",
+          shell: "bash",
+          osVersion: "Linux",
+          nodeVersion: "v24",
+        },
+        presentationSurface: "zcode_web",
+        ...excluded,
+      }).build();
+      expect(
+        excludedResult.systemMessages.some((message) =>
+          String(message.content).includes("::next-prompt"),
+        ),
+      ).toBe(false);
+    }
+  });
+
   it("does not inject the Desktop context for the default terminal surface", () => {
     const result = createContextBuilder({
       workingDirectory: "/workspace",
@@ -248,6 +317,9 @@ describe("ContextBuilder meta user context", () => {
     expect(result.sections.some((section) => section.source === "desktop_context")).toBe(false);
     expect(
       result.systemMessages.some((message) => String(message.content).includes("Desktop Context")),
+    ).toBe(false);
+    expect(
+      result.systemMessages.some((message) => String(message.content).includes("::next-prompt")),
     ).toBe(false);
   });
 
@@ -1478,6 +1550,7 @@ describe("context builder — workflow actor identity", () => {
     expect(text).not.toContain("For actions that are hard to reverse");
     expect(text).not.toContain("# Session-specific guidance");
     expect(text).not.toContain("ZCode Desktop");
+    expect(text).not.toContain("::next-prompt");
     // 后续段照常。
     expect(text).toContain("# Environment");
   });

@@ -2,6 +2,7 @@ import type {
   IWindowControllerService,
   WindowHostControllerFrame,
   WindowHostControllerTaskListResult,
+  WindowHostControllerTaskListItem,
   ZCodeTaskListQuery,
 } from "@zcode/services";
 import {
@@ -18,6 +19,8 @@ import { logger } from "@/logger.js";
 export interface WindowControllerTaskListRegistry {
   subscribe(listener: () => void): () => void;
   getRevision(): number;
+  /** 已收到的 Controller 元数据快照；null 表示尚无快照，不发起列表补查。 */
+  getCachedTasks(): WindowHostControllerTaskListItem[] | null;
   list(
     queryKey: string,
     version: WindowControllerTaskListVersion,
@@ -85,6 +88,7 @@ export function getWindowControllerTaskListRegistry(
   >();
   const taskRows = new Map<string, WindowHostControllerTaskRow>();
   let revision = 0;
+  let hasTaskSnapshot = false;
   let started = false;
   let generation = 0;
   let notificationScheduled = false;
@@ -110,6 +114,7 @@ export function getWindowControllerTaskListRegistry(
     cursors.clear();
     queryCache.clear();
     taskRows.clear();
+    hasTaskSnapshot = false;
     const ids = Array.from(subscriptionIds);
     subscriptionIds.clear();
     for (const subscriptionId of ids) {
@@ -151,6 +156,7 @@ export function getWindowControllerTaskListRegistry(
       }
       const taskFrame = frame as WindowHostControllerTaskFrame;
       if (taskFrame.payload.kind === "snapshot") {
+        hasTaskSnapshot = true;
         taskRows.clear();
         for (const row of taskFrame.payload.snapshot.tasks) {
           taskRows.set(taskAddressKey(row.address), row);
@@ -214,6 +220,16 @@ export function getWindowControllerTaskListRegistry(
     },
     getRevision() {
       return revision;
+    },
+    getCachedTasks() {
+      if (!hasTaskSnapshot) return null;
+      return Array.from(taskRows.values(), (row) => ({
+        ...row.meta,
+        remoteSessionId: row.address.remoteSessionId,
+        sourceAvailability: row.sourceAvailability,
+        liveStatus: row.liveStatus,
+        activity: row.activity,
+      }));
     },
     list(queryKey, version, query) {
       const versionKey = cacheVersionKey(version);

@@ -1,24 +1,21 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CircleAlertIcon,
   InboxIcon,
-  LoaderCircleIcon,
   MessageCircleQuestionIcon,
-  RefreshCwIcon,
   ShieldQuestionIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog.js";
-import { useGlobalTaskList } from "@/hooks/useGlobalTaskList.js";
+  Popover,
+  PopoverContent,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover.js";
+import { useCachedTaskAttention } from "@/hooks/useCachedTaskAttention.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import { deriveTaskAttention, isTaskAttentionItem, taskAttentionKey } from "@/lib/taskAttention.js";
+import { deriveTaskAttention, taskAttentionKey } from "@/lib/taskAttention.js";
 import type { WorkspaceTabState } from "@/store/tabStore.js";
 import { requestTaskInteractionOpen } from "@/v4/taskAttentionNavigation.js";
 
@@ -36,15 +33,10 @@ export function TaskAttentionDialog({ workspaceTabs, onSelectTask }: TaskAttenti
   const { intl } = useZCodeIntl();
   const [open, setOpen] = useState(false);
   const pendingNavigationRef = useRef<(() => void) | null>(null);
-  const taskList = useGlobalTaskList({
-    kind: "timeline",
-    workspaceTabs,
-    sortBy: "updated",
-    searchQuery: "",
-    expanded: true,
-    collapsedLimit: 0,
-    predicate: isTaskAttentionItem,
-  });
+  const tasks = useCachedTaskAttention(workspaceTabs);
+  useEffect(() => {
+    if (tasks.length === 0) setOpen(false);
+  }, [tasks.length]);
   const workspaceByKey = useMemo(
     () =>
       new Map(
@@ -53,11 +45,11 @@ export function TaskAttentionDialog({ workspaceTabs, onSelectTask }: TaskAttenti
     [workspaceTabs],
   );
   const title = intl.formatMessage({ id: "taskAttention.title" });
-  const refreshLabel = intl.formatMessage({ id: "taskAttention.refresh" });
+  if (tasks.length === 0) return null;
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
+    <Popover open={open} onOpenChange={setOpen} modal={false}>
+      <PopoverTrigger asChild>
         <Button
           type="button"
           variant="ghost"
@@ -67,17 +59,21 @@ export function TaskAttentionDialog({ workspaceTabs, onSelectTask }: TaskAttenti
         >
           <InboxIcon aria-hidden className="size-4" />
           <span className="min-w-0 flex-1 truncate text-left">{title}</span>
-          <span className="shrink-0 text-ui-sm tabular-nums text-foreground-subtle">
-            {taskList.total}
+          <span
+            data-attention-count
+            className="shrink-0 rounded-md bg-interaction-confirmation-surface px-1.5 text-ui-xs tabular-nums text-interaction-confirmation-foreground"
+          >
+            {tasks.length}
           </span>
         </Button>
-      </DialogTrigger>
-      <DialogContent
-        className="min-w-0 sm:max-w-xl"
-        data-testid="task-attention-dialog"
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="min-w-0 w-80 max-w-full"
+        data-testid="task-attention-popover"
         onCloseAutoFocus={(event) => {
-          // 修复原因：同步导航发生时 Radix focus trap 尚未卸载，会挡住目标会话的 focus。
-          // 关闭完成后再导航；Esc/关闭仍由真正的 Trigger 恢复焦点。
+          // 修复原因：关闭 Popover 的自动焦点恢复不能抢回目标会话已取得的焦点。
+          // 关闭完成后再导航；Escape/Trigger 关闭继续使用 Radix 的正常焦点恢复。
           const navigate = pendingNavigationRef.current;
           if (!navigate) return;
           event.preventDefault();
@@ -85,46 +81,12 @@ export function TaskAttentionDialog({ workspaceTabs, onSelectTask }: TaskAttenti
           navigate();
         }}
       >
-        <DialogHeader className="pr-6">
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>
-            {intl.formatMessage({ id: "taskAttention.description" })}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex min-w-0 items-center justify-between gap-2">
-          <span className="text-ui-sm text-foreground-subtle">
-            {intl.formatMessage({ id: "taskAttention.count" }, { count: String(taskList.total) })}
-          </span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              void taskList.refresh();
-            }}
-            disabled={taskList.loading}
-          >
-            <RefreshCwIcon aria-hidden className="size-3.5" />
-            {refreshLabel}
-          </Button>
-        </div>
-        {taskList.loading ? (
-          <p role="status" className="flex items-center gap-2 text-ui-base text-foreground-subtle">
-            <LoaderCircleIcon aria-hidden className="size-3.5 animate-spin" />
-            {intl.formatMessage({ id: "taskAttention.loading" })}
-          </p>
-        ) : null}
-        {!taskList.loading && taskList.items.length === 0 ? (
-          <p className="py-4 text-ui-base text-foreground-subtle">
-            {intl.formatMessage({ id: "taskAttention.empty" })}
-          </p>
-        ) : null}
+        <PopoverHeader>
+          <PopoverTitle>{title}</PopoverTitle>
+        </PopoverHeader>
         {/* 修复原因：满宽条目的外侧焦点环需要滚动容器留白，避免被 overflow 裁掉。 */}
-        <ul
-          className="-m-1 max-h-[min(60dvh,32rem)] min-h-0 space-y-1 overflow-y-auto p-1"
-          aria-label={title}
-        >
-          {taskList.items.map((task) => {
+        <ul className="-m-1 max-h-80 min-h-0 space-y-1 overflow-y-auto p-1" aria-label={title}>
+          {tasks.map((task) => {
             const attention = deriveTaskAttention(task);
             if (!attention) return null;
             const workspace = workspaceByKey.get(
@@ -138,9 +100,10 @@ export function TaskAttentionDialog({ workspaceTabs, onSelectTask }: TaskAttenti
                   : CircleAlertIcon;
             return (
               <li key={taskAttentionKey(task)}>
-                <button
+                <Button
                   type="button"
-                  className="flex w-full min-w-0 items-start gap-2 rounded-lg px-2 py-2 text-left text-ui-base hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-input-border-focused"
+                  variant="ghost"
+                  className="h-auto w-full min-w-0 items-start justify-start gap-2 rounded-lg px-2 py-2 text-left text-ui-base whitespace-normal"
                   data-attention-kind={attention.kind}
                   onClick={() => {
                     pendingNavigationRef.current = () => {
@@ -175,12 +138,12 @@ export function TaskAttentionDialog({ workspaceTabs, onSelectTask }: TaskAttenti
                         : ""}
                     </span>
                   </span>
-                </button>
+                </Button>
               </li>
             );
           })}
         </ul>
-      </DialogContent>
-    </Dialog>
+      </PopoverContent>
+    </Popover>
   );
 }

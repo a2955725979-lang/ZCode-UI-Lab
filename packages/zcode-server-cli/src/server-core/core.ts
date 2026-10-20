@@ -40,6 +40,7 @@ export async function runServerCore(generation: number): Promise<void> {
     );
   }
   const services = createLocalServices({
+    standaloneWebHost: true,
     zcodeBuiltinProviderConfigFilePath,
     serviceAuthorityMode: "standalone-server",
     topicResourceRelayChannel: (request) => topicResourcePeers.getChannel(request),

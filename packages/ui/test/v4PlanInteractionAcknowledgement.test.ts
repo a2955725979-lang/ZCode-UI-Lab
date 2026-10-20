@@ -1,12 +1,10 @@
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  CommandEnvelope,
-  ConversationSnapshot,
-} from "@zcode/shared/zcode-protocol-v4";
+import type { CommandEnvelope, ConversationSnapshot } from "@zcode/shared/zcode-protocol-v4";
 import { ZCodeIntlProvider } from "@/i18n/IntlProvider.js";
 import type { ElicitationDialog } from "@/ElicitationDialog.js";
+import { pruneV4ElicitationState } from "@/v4/V4ElicitationDialog.js";
 import { V4InteractionDialogs } from "@/v4/V4InteractionDialogs.js";
 
 type ElicitationDialogProps = ComponentProps<typeof ElicitationDialog>;
@@ -94,19 +92,19 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 afterEach(() => {
+  // 每个 SSR 用例复用 fixture 身份；显式清理过期请求，不能让上个用例的 accepted 锁跨测试。
+  pruneV4ElicitationState("/workspace", undefined, "session-plan", new Set());
   captured.elicitationProps = null;
   vi.clearAllMocks();
 });
 
 describe("V4 mobile plan interaction acknowledgement", () => {
   it("reports an accepted ExitPlanMode response to the owning pane", async () => {
-    captured.sendCommand.mockImplementation(
-      async (envelope: CommandEnvelope) => ({
-        commandId: envelope.commandId,
-        revisionAtDecision: 1,
-        status: "accepted" as const,
-      }),
-    );
+    captured.sendCommand.mockImplementation(async (envelope: CommandEnvelope) => ({
+      commandId: envelope.commandId,
+      revisionAtDecision: 1,
+      status: "accepted" as const,
+    }));
     const onPlanInteractionAccepted = vi.fn();
 
     renderToStaticMarkup(
@@ -135,13 +133,11 @@ describe("V4 mobile plan interaction acknowledgement", () => {
   it.each(["duplicate", "noop"] as const)(
     "reports a %s ExitPlanMode response for authoritative reconciliation",
     async (status) => {
-      captured.sendCommand.mockImplementation(
-        async (envelope: CommandEnvelope) => ({
-          commandId: envelope.commandId,
-          revisionAtDecision: 1,
-          status,
-        }),
-      );
+      captured.sendCommand.mockImplementation(async (envelope: CommandEnvelope) => ({
+        commandId: envelope.commandId,
+        revisionAtDecision: 1,
+        status,
+      }));
       const onPlanInteractionAccepted = vi.fn();
 
       renderToStaticMarkup(
@@ -166,14 +162,12 @@ describe("V4 mobile plan interaction acknowledgement", () => {
   );
 
   it("does not report rejected ExitPlanMode responses", async () => {
-    captured.sendCommand.mockImplementation(
-      async (envelope: CommandEnvelope) => ({
-        commandId: envelope.commandId,
-        reasonCode: "guard.interactionRejected",
-        revisionAtDecision: 1,
-        status: "rejected" as const,
-      }),
-    );
+    captured.sendCommand.mockImplementation(async (envelope: CommandEnvelope) => ({
+      commandId: envelope.commandId,
+      reasonCode: "guard.interactionRejected",
+      revisionAtDecision: 1,
+      status: "rejected" as const,
+    }));
     const onPlanInteractionAccepted = vi.fn();
 
     renderToStaticMarkup(
@@ -197,13 +191,11 @@ describe("V4 mobile plan interaction acknowledgement", () => {
   });
 
   it("does not report accepted AskUserQuestion responses as plan interactions", async () => {
-    captured.sendCommand.mockImplementation(
-      async (envelope: CommandEnvelope) => ({
-        commandId: envelope.commandId,
-        revisionAtDecision: 1,
-        status: "accepted" as const,
-      }),
-    );
+    captured.sendCommand.mockImplementation(async (envelope: CommandEnvelope) => ({
+      commandId: envelope.commandId,
+      revisionAtDecision: 1,
+      status: "accepted" as const,
+    }));
     const onPlanInteractionAccepted = vi.fn();
 
     renderToStaticMarkup(

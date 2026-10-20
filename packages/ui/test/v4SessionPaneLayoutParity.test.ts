@@ -1,14 +1,30 @@
+// @vitest-environment jsdom
+
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { createElement } from "react";
+import { createElement, type ReactNode } from "react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ConversationSnapshot,
   PendingInteraction,
   SubagentRow,
   UserInputRow,
 } from "@zcode/shared/zcode-protocol-v4";
+import {
+  claimSessionHistoryMode,
+  SESSION_HISTORY_MODE_STORAGE_PREFIX,
+  getExplicitSessionHistoryMode,
+  hasUnpersistedSessionHistoryMode,
+} from "@/store/sessionHistoryModeStore.js";
+import {
+  toast,
+  ToastMessageView,
+  type ToastOptions,
+  type ToastItem,
+} from "@/components/ui/toast.js";
+import type { PendingCommandEntry } from "@/v4/pendingCommandRegistry.js";
 import { SessionPane } from "@/v4/SessionPane.js";
 import { ZCodeIntlProvider } from "@/i18n/IntlProvider.js";
 import type {
@@ -64,15 +80,67 @@ vi.mock("@/v4/useConversationProjection.js", () => ({
   useConversationProjection: () => projectionState.current,
 }));
 
-vi.mock("@/v4/V4ConversationContext.js", () => ({
-  useV4Conversation: () => ({
-    layer: {
-      acquire: vi.fn(),
+const conversation = vi.hoisted(() => {
+  const lease = {
+    release: vi.fn(),
+    store: {
+      onOnlineModelTransition: vi.fn(() => () => {}),
+      refreshPlans: vi.fn(async () => {}),
+      settleCommand: vi.fn(),
     },
+  };
+  return {
+    layer: { acquire: vi.fn(() => lease), queryCommands: vi.fn(async () => ({ results: [] })) },
     sendCommand: vi.fn(),
     attachmentPut: vi.fn(),
+    workflowRuns: vi.fn(() => new Promise(() => {})),
+  };
+});
+vi.mock("@/v4/V4ConversationContext.js", () => ({ useV4Conversation: () => conversation }));
+const dockState = vi.hoisted(() => ({
+  simpleTimeline: false,
+  quotaVisible: false,
+  quotaDismissed: false,
+  recovery: [] as PendingCommandEntry[],
+}));
+vi.mock("@/v4/useV4SessionQuotaBanner.js", () => ({
+  useV4SessionQuotaBanner: () => ({
+    state: { visible: dockState.quotaVisible, blocksSubmit: false },
+    dismissed: dockState.quotaDismissed,
+    takesOverError: false,
+    markShown: vi.fn(),
+    dismiss: vi.fn(),
   }),
 }));
+vi.mock("@/v4/usePendingCommandRecovery.js", () => ({
+  usePendingCommandRecovery: () => dockState.recovery,
+}));
+vi.mock("@/v4/ConversationQuotaBanner.js", () => ({
+  ConversationQuotaBanner: () => createElement("div", { "data-dock-banner": "quota" }),
+}));
+vi.mock("@/v4/PendingCommandRecoveryBanner.js", () => ({
+  PendingCommandRecoveryBanner: () => createElement("div", { "data-dock-banner": "pending" }),
+}));
+vi.mock("@/v4/WorkspaceHookPendingBanner.js", () => ({
+  WorkspaceHookPendingBanner: () => createElement("div", { "data-dock-banner": "hook" }),
+}));
+vi.mock("@/components/ui/toast.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/ui/toast.js")>()),
+  toast: vi.fn(),
+}));
+vi.mock("@/v4/ConversationTimeline.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/v4/ConversationTimeline.js")>();
+  return {
+    ...actual,
+    ConversationTimeline: (props: { bottomDock?: ReactNode }) =>
+      dockState.simpleTimeline
+        ? createElement("div", { "data-testid": "isolated-timeline" }, props.bottomDock)
+        : createElement(
+            actual.ConversationTimeline,
+            props as Parameters<typeof actual.ConversationTimeline>[0],
+          ),
+  };
+});
 
 const interfaceState = vi.hoisted(() => ({ interfaceMode: "coding" as "coding" | "office" }));
 vi.mock("@/store/StoreProvider.js", () => ({
@@ -98,16 +166,19 @@ vi.mock("@/hooks/useSettingService.js", () => ({
   }),
 }));
 
+// Dock 状态验证不连接群消息广播；保留真实 SessionPane 的条件和顺序。
+vi.mock("@/v4/BotGroupDeliveryAction.js", () => ({
+  BotGroupDeliveryProvider: ({ children }: { children: ReactNode }) => children,
+  ConnectedBotGroupDeliveryAction: () => null,
+}));
+const services = vi.hoisted(() => ({
+  highspeedCardService: { getSnapshot: vi.fn(() => new Promise(() => {})) },
+  zcodeSessionService: { updateProviderRegistry: vi.fn() },
+  zcodeTaskService: { restartWorkspaceProcess: vi.fn() },
+}));
 vi.mock("@/hooks/useServices.js", () => ({
   useOptionalServices: () => null,
-  useServices: () => ({
-    zcodeSessionService: {
-      updateProviderRegistry: vi.fn(),
-    },
-    zcodeTaskService: {
-      restartWorkspaceProcess: vi.fn(),
-    },
-  }),
+  useServices: () => services,
 }));
 
 vi.mock("@/v4/composer/useDraftConfigControl.js", () => ({
@@ -380,6 +451,32 @@ function renderPane({
     ),
   );
 }
+
+beforeEach(() => {
+  conversationTelemetryState.current = null;
+  dockState.simpleTimeline = false;
+  dockState.quotaVisible = false;
+  dockState.quotaDismissed = false;
+  dockState.recovery = [];
+  vi.mocked(toast).mockClear();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+    window.setTimeout(() => callback(performance.now()), 0),
+  );
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => window.clearTimeout(id));
+});
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("SessionPane v4 chat layout parity", () => {
   it("renders the draft greeting and the composer in the shared timeline viewport", () => {
@@ -894,83 +991,85 @@ describe("Chat / Work progress presentation", () => {
     "awaitingAnswer",
     "awaitingConfirmation",
     "backgroundRunning",
-  ] as const)("keeps %s feedback while showing engineering progress only in Work", (scenario) => {
-    const snapshot = makeSnapshot({
-      plan: {
-        updatedAt: 1,
-        items: [
-          { id: "done", content: "Inspect files", status: "completed" },
-          { id: "current", content: "Check output", status: "inProgress" },
-          { id: "later", content: "Deliver", status: "pending" },
-        ],
-      },
-    });
-    if (
-      ["running", "prewarming", "completedSuccess", "completedInterrupted", "error"].includes(
-        scenario,
-      )
-    ) {
-      snapshot.control.phase = scenario as ConversationSnapshot["control"]["phase"];
-    } else if (scenario === "stopping") {
-      snapshot.control.phase = "running";
-      snapshot.control.stopState = "stopping";
-    } else if (scenario === "awaitingAnswer") {
-      snapshot.pendingInteractions = [pendingStructuredUserInputInteraction()];
-    } else if (scenario === "awaitingConfirmation") {
-      snapshot.pendingInteractions = [pendingPermissionInteraction()];
-    } else {
-      snapshot.backgroundWorks = [
-        {
-          workId: "bg",
-          kind: "bash",
-          title: "Check",
-          status: "running",
-          startedAt: 1,
-          anchorRowId: null,
-        },
-      ];
-    }
-    if (scenario === "running") {
-      snapshot.control.canStop = true;
-      snapshot.control.stopState = "stoppable";
-      snapshot.control.stopTargetKind = "assistant";
-    }
-    if (scenario === "error")
-      snapshot.control.lastError = {
-        code: "fault.provider.rateLimited",
-        message: "Provider rate limit exceeded.",
-        recoverable: true,
-        at: 1,
-        source: "provider",
-      };
-    for (const compactForRemoteControl of [false, true]) {
-      for (const interfaceMode of ["office", "coding"] as const) {
-        const html = renderPane({ interfaceMode, compactForRemoteControl, snapshot });
-        expect(
-          html.includes('data-testid="v4-task-progress-summary"'),
-          `${scenario}/${interfaceMode}/${compactForRemoteControl}`,
-        ).toBe(interfaceMode === "coding");
-        expect(html).not.toMatch(/验收：未验证|Acceptance: unverified|verificationUnverified/);
-        expect(html).toContain('data-testid="mock-composer"');
-        expect(html).toContain('data-testid="mock-interactions"');
-        const composer = statusPanelCapture.composerProps.at(-1)!;
-        expect(composer.snapshot).toBe(snapshot);
-        expect(composer.onStop).toEqual(expect.any(Function));
-        if (snapshot.pendingInteractions.length) {
-          expect(composer.blockingRequestId).toBe(snapshot.pendingInteractions[0]!.interactionId);
-        }
-        if (scenario === "error")
-          expect(composer.error).toMatchObject({ message: "Provider rate limit exceeded." });
-      }
-    }
-  });
-
-  it.each([
-    ["zh-CN", "本次执行已结束", "本轮已结束"],
-    ["en-US", "Execution ended", "Turn ended"],
   ] as const)(
-    "uses precise ended copy in %s without an acceptance verdict",
-    (locale, expected, old) => {
+    "keeps %s plan feedback in the existing status panel without a duplicate dock summary",
+    (scenario) => {
+      const snapshot = makeSnapshot({
+        plan: {
+          updatedAt: 1,
+          items: [
+            { id: "done", content: "Inspect files", status: "completed" },
+            { id: "current", content: "Check output", status: "inProgress" },
+            { id: "later", content: "Deliver", status: "pending" },
+          ],
+        },
+      });
+      if (
+        ["running", "prewarming", "completedSuccess", "completedInterrupted", "error"].includes(
+          scenario,
+        )
+      ) {
+        snapshot.control.phase = scenario as ConversationSnapshot["control"]["phase"];
+      } else if (scenario === "stopping") {
+        snapshot.control.phase = "running";
+        snapshot.control.stopState = "stopping";
+      } else if (scenario === "awaitingAnswer") {
+        snapshot.pendingInteractions = [pendingStructuredUserInputInteraction()];
+      } else if (scenario === "awaitingConfirmation") {
+        snapshot.pendingInteractions = [pendingPermissionInteraction()];
+      } else {
+        snapshot.backgroundWorks = [
+          {
+            workId: "bg",
+            kind: "bash",
+            title: "Check",
+            status: "running",
+            startedAt: 1,
+            anchorRowId: null,
+          },
+        ];
+      }
+      if (scenario === "running") {
+        snapshot.control.canStop = true;
+        snapshot.control.stopState = "stoppable";
+        snapshot.control.stopTargetKind = "assistant";
+      }
+      if (scenario === "error")
+        snapshot.control.lastError = {
+          code: "fault.provider.rateLimited",
+          message: "Provider rate limit exceeded.",
+          recoverable: true,
+          at: 1,
+          source: "provider",
+        };
+      for (const compactForRemoteControl of [false, true]) {
+        for (const interfaceMode of ["office", "coding"] as const) {
+          const html = renderPane({ interfaceMode, compactForRemoteControl, snapshot });
+          expect(
+            html.includes('data-testid="v4-task-progress-summary"'),
+            `${scenario}/${interfaceMode}/${compactForRemoteControl}`,
+          ).toBe(false);
+          expect(statusPanelCapture.props).toHaveLength(1);
+          expect(statusPanelCapture.props[0]?.plan).toBe(snapshot.plan);
+          expect(html).not.toMatch(/验收：未验证|Acceptance: unverified|verificationUnverified/);
+          expect(html).toContain('data-testid="mock-composer"');
+          expect(html).toContain('data-testid="mock-interactions"');
+          const composer = statusPanelCapture.composerProps.at(-1)!;
+          expect(composer.snapshot).toBe(snapshot);
+          expect(composer.onStop).toEqual(expect.any(Function));
+          if (snapshot.pendingInteractions.length) {
+            expect(composer.blockingRequestId).toBe(snapshot.pendingInteractions[0]!.interactionId);
+          }
+          if (scenario === "error")
+            expect(composer.error).toMatchObject({ message: "Provider rate limit exceeded." });
+        }
+      }
+    },
+  );
+
+  it.each(["zh-CN", "en-US"] as const)(
+    "keeps completed plan ownership in the status panel in %s without duplicate execution or verification labels",
+    (locale) => {
       const snapshot = makeSnapshot({
         plan: {
           updatedAt: 1,
@@ -978,10 +1077,215 @@ describe("Chat / Work progress presentation", () => {
         },
       });
       const html = renderPane({ locale, snapshot });
-      expect(html).toContain(expected);
-      expect(html).not.toContain(old);
-      expect(html).toContain('data-plan-status="completed"');
-      expect(html).not.toMatch(/验收|Acceptance|verification/i);
+      expect(statusPanelCapture.props).toHaveLength(1);
+      expect(statusPanelCapture.props[0]?.plan).toBe(snapshot.plan);
+      expect(statusPanelCapture.props[0]?.plan).toMatchObject({
+        items: [{ id: "done", status: "completed" }],
+      });
+      expect(html).not.toContain('data-testid="v4-task-progress-summary"');
+      expect(html).not.toMatch(
+        /本次执行已结束|本轮已结束|Execution ended|Turn ended|验收|Acceptance|verification/i,
+      );
     },
   );
+});
+
+function recoveryFixture(): PendingCommandEntry {
+  return {
+    commandId: "create-uncertain",
+    clientId: "fixture-client",
+    sessionId: "session-1",
+    issuedAt: 1,
+    expiresAt: Date.now() + 10_000,
+    recovery: "creationUnknown",
+    replay: { kind: "queryOnly", type: "forkAssistant" },
+  };
+}
+function hookSnapshot(): ConversationSnapshot {
+  return makeSnapshot({
+    workspaceHookAdmission: { pendingCount: 1, bundleDigest: "fixture-hook-bundle" },
+  });
+}
+
+describe("v2 dock priority and history persistence toast", () => {
+  it.each([
+    { quota: true, pending: true, hook: true, expected: "quota" },
+    { quota: false, pending: true, hook: true, expected: "pending" },
+    { quota: false, pending: false, hook: true, expected: "hook" },
+    { quota: false, pending: false, hook: false, expected: null },
+  ])(
+    "renders one highest priority banner for $expected through the real SessionPane",
+    ({ quota, pending, hook, expected }) => {
+      dockState.quotaVisible = quota;
+      dockState.recovery = pending ? [recoveryFixture()] : [];
+      for (const interfaceMode of ["coding", "office"] as const) {
+        for (const compactForRemoteControl of [false, true]) {
+          const html = renderPane({
+            snapshot: hook ? hookSnapshot() : makeSnapshot(),
+            interfaceMode,
+            compactForRemoteControl,
+          });
+          const banners = [...html.matchAll(/data-dock-banner="([^"]+)"/g)].map(
+            (match) => match[1],
+          );
+          expect(banners).toEqual(expected ? [expected] : []);
+          if (expected)
+            expect(html.indexOf(`data-dock-banner="${expected}"`)).toBeLessThan(
+              html.indexOf('data-testid="mock-queue"'),
+            );
+          expect(html.indexOf('data-testid="mock-queue"')).toBeLessThan(
+            html.indexOf('data-testid="mock-interactions"'),
+          );
+          expect(html.indexOf('data-testid="mock-interactions"')).toBeLessThan(
+            html.indexOf('data-testid="mock-composer"'),
+          );
+        }
+      }
+    },
+  );
+
+  it("lets a dismissed quota banner yield to pending creation, then yields to hook after recovery clears", () => {
+    dockState.quotaVisible = true;
+    dockState.quotaDismissed = true;
+    dockState.recovery = [recoveryFixture()];
+    const pendingHtml = renderPane({ snapshot: hookSnapshot() });
+    expect(pendingHtml).toContain('data-dock-banner="pending"');
+    expect(pendingHtml).not.toContain('data-dock-banner="quota"');
+    expect(pendingHtml).not.toContain('data-dock-banner="hook"');
+    dockState.recovery = [];
+    const hookHtml = renderPane({ snapshot: hookSnapshot() });
+    expect(hookHtml).toContain('data-dock-banner="hook"');
+    expect(hookHtml).not.toContain('data-dock-banner="pending"');
+  });
+
+  it("keeps interaction and composer positions stable while forwarding the blocking request", () => {
+    const snapshot = makeSnapshot({
+      pendingInteractions: [pendingStructuredUserInputInteraction()],
+    });
+    const html = renderPane({ snapshot });
+    const composer = statusPanelCapture.composerProps.at(-1)!;
+    expect(composer.blockingRequestId).toBe("ask-1");
+    expect(html.indexOf('data-testid="mock-queue"')).toBeLessThan(
+      html.indexOf('data-testid="mock-interactions"'),
+    );
+    expect(html.indexOf('data-testid="mock-interactions"')).toBeLessThan(
+      html.indexOf('data-testid="mock-composer"'),
+    );
+    expect(html).not.toContain('data-testid="v4-task-progress-summary"');
+  });
+});
+
+let historyToastSerial = 0;
+function mountHistoryPane(
+  scope: { workspacePath: string; workspaceIdentity?: string },
+  sessionId: string,
+) {
+  dockState.simpleTimeline = true;
+  const element = (targetSessionId: string) => {
+    projectionState.current = {
+      status: "live",
+      snapshot: makeSnapshot({ sessionId: targetSessionId }),
+      subscriptionId: "history-toast",
+      lastError: null,
+      optimisticCommands: [],
+      loadingOlder: false,
+    };
+    return createElement(
+      ZCodeIntlProvider,
+      { initialLocale: "zh-CN" },
+      createElement(SessionPane, { paneId: "history-toast", sessionId: targetSessionId, ...scope }),
+    );
+  };
+  const view = render(element(sessionId));
+  return {
+    ...view,
+    switchSession: (nextId: string) => view.rerender(element(nextId)),
+    rerenderSame: () => view.rerender(element(sessionId)),
+  };
+}
+function latestHistoryToast(): { message: string; options: ToastOptions } {
+  const call = vi
+    .mocked(toast)
+    .mock.calls.filter(([, options]) => options?.dedupeKey?.startsWith("history-classification:"))
+    .at(-1);
+  expect(call).toBeDefined();
+  return { message: call![0], options: call![1]! };
+}
+function renderHistoryToast(item: ReturnType<typeof latestHistoryToast>) {
+  return render(
+    createElement(ToastMessageView, {
+      visible: true,
+      item: {
+        id: 1,
+        message: item.message,
+        durationMs: 3000,
+        position: "top-center",
+        ...item.options,
+      } as ToastItem,
+    }),
+  );
+}
+
+describe("v2 real SessionPane history toast and Retry", () => {
+  it("shows a single actionable toast instead of a dock banner and Retry persists the retained mode", () => {
+    const scope = {
+      workspacePath: `/history-toast-${++historyToastSerial}`,
+      workspaceIdentity: `remote-${historyToastSerial}`,
+    };
+    const sessionId = "history-session";
+    const failStorage = vi.spyOn(Storage.prototype, "setItem").mockImplementationOnce(() => {
+      throw new Error("fixture storage failure");
+    });
+    expect(claimSessionHistoryMode(scope, sessionId, "work").persisted).toBe(false);
+    const view = mountHistoryPane(scope, sessionId);
+    const item = latestHistoryToast();
+    expect(item.options.dedupeKey).toBe(
+      `history-classification:${JSON.stringify([scope.workspaceIdentity, sessionId])}`,
+    );
+    expect(view.container.textContent).not.toContain(item.message);
+    view.rerenderSame();
+    expect(
+      vi
+        .mocked(toast)
+        .mock.calls.filter(([, options]) => options?.dedupeKey === item.options.dedupeKey),
+    ).toHaveLength(1);
+    failStorage.mockRestore();
+    const toastView = renderHistoryToast(item);
+    fireEvent.click(toastView.getByRole("button", { name: item.options.actionLabel! }));
+    expect(hasUnpersistedSessionHistoryMode(scope, sessionId)).toBe(false);
+    expect(getExplicitSessionHistoryMode(scope, sessionId)).toBe("work");
+    expect(item.options.actionLabel).toBe("重试");
+  });
+
+  it("retains failed Retry with the same dedupe key and retries its original scope after session navigation", () => {
+    const scope = { workspacePath: `/history-toast-${++historyToastSerial}` };
+    const originalSetItem = Storage.prototype.setItem;
+    const failStorage = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(function (this: Storage, key, value) {
+        if (key.startsWith(SESSION_HISTORY_MODE_STORAGE_PREFIX))
+          throw new Error("fixture storage failure");
+        originalSetItem.call(this, key, value);
+      });
+    claimSessionHistoryMode(scope, "first-session", "chat");
+    const view = mountHistoryPane(scope, "first-session");
+    const first = latestHistoryToast();
+    act(() => first.options.onAction?.());
+    const retryFailure = latestHistoryToast();
+    expect(retryFailure.options.dedupeKey).toBe(first.options.dedupeKey);
+    expect(hasUnpersistedSessionHistoryMode(scope, "first-session")).toBe(true);
+    act(() => {
+      claimSessionHistoryMode(scope, "second-session", "work");
+    });
+    view.switchSession("second-session");
+    const second = latestHistoryToast();
+    expect(second.options.dedupeKey).not.toBe(first.options.dedupeKey);
+    failStorage.mockRestore();
+    act(() => retryFailure.options.onAction?.());
+    expect(hasUnpersistedSessionHistoryMode(scope, "first-session")).toBe(false);
+    expect(getExplicitSessionHistoryMode(scope, "first-session")).toBe("chat");
+    expect(hasUnpersistedSessionHistoryMode(scope, "second-session")).toBe(true);
+    act(() => second.options.onAction?.());
+    expect(hasUnpersistedSessionHistoryMode(scope, "second-session")).toBe(false);
+  });
 });

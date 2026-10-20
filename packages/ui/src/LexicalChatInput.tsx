@@ -14,6 +14,7 @@
  * 2. ChatComposerPasteEvent 收口为本文件导出的结构类型；
  * 3. mention 面板用 enableMentionPanel 控制；slash command 始终读取 CLI workspace catalog。
  */
+import { isEditorCompletionMenuOpen } from "@/lib/editorCompletionState.js";
 import { $getPromptMarkdown } from "@/mentions/promptSerialization.js";
 import { PromptClipboardPlugin } from "@/mentions/PromptClipboardPlugin.js";
 import {
@@ -76,6 +77,7 @@ export interface LexicalChatInputHandle {
   getEditorState: () => EditorState;
   getMarkdown: () => string;
   getText: () => string;
+  isCompletionMenuOpen: () => boolean;
   appendText: (text: string) => void;
   appendFileMention: (
     label: string,
@@ -932,7 +934,8 @@ function E2ELexicalInputBridgePlugin({ inputTestId }: { inputTestId?: string }) 
       getEditorState: () => editor.getEditorState(),
       getText: () => getEditorMarkdown(editor.getEditorState()),
       setText: (text: string) => replaceEditorText(editor, text),
-      setTextWithPluginMentions: (text: string) => replaceEditorTextWithPluginMentions(editor, text),
+      setTextWithPluginMentions: (text: string) =>
+        replaceEditorTextWithPluginMentions(editor, text),
       setEditorStateJson: (editorStateJson: string) =>
         replaceEditorStateJson(editor, editorStateJson),
     };
@@ -1294,6 +1297,7 @@ function EditorApiPlugin({
 
     editorApiRef.current = {
       clear: () => resetEditor(editor),
+      isCompletionMenuOpen: () => isEditorCompletionMenuOpen(editor),
       focus: () => editor.focus(),
       // 恢复前让草稿 owner 先接收待提交用户文档，再检查 revision；不改变正文或添加恢复 tag。
       flushPendingChanges: () => editor.read(() => {}),

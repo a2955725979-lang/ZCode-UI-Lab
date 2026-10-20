@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ZCodeElicitationRequest, ZCodePermissionOption, ZCodeProvider } from "@zcode/shared";
+import type { ZCodePermissionOption, ZCodeProvider } from "@zcode/shared";
 import type { ConversationSnapshot } from "@zcode/shared/zcode-protocol-v4";
 import {
   V4ElicitationDialog,
+  getCurrentSessionInteractionSnapshot,
+  resolveV4ElicitationRequest,
   isV4PlanApproval,
   createInteractionAutoResolutionIntentTracker,
   buildV4InteractionScopeKey,
@@ -31,6 +33,7 @@ import {
   pendingUserInputToElicitationRequest,
   pendingUserInputToViewModel,
 } from "@/v4/pendingInteractionAdapter.js";
+import { useTaskInteractionReveal } from "@/v4/taskAttentionNavigation.js";
 import { V4UserInputDialog } from "@/v4/V4UserInputDialog.js";
 import { useV4Conversation } from "@/v4/V4ConversationContext.js";
 
@@ -42,7 +45,7 @@ export interface V4InteractionDialogsProps {
   workspaceIdentity?: string;
   remoteSessionId?: string;
   isWebRemoteControl?: boolean;
-  /** 只有当前可见会话可以打开交互；后台 pane 不取得输入焦点。 */
+  /** 后台 pane 仍渲染交互卡；仅当前可见会话自动取得输入焦点。 */
   isActive?: boolean;
   provider?: ZCodeProvider;
   snapshot: ConversationSnapshot | null;
@@ -50,23 +53,7 @@ export interface V4InteractionDialogsProps {
   onPlanInteractionAccepted?: (interactionId: string) => void;
 }
 
-export function getCurrentSessionInteractionSnapshot(
-  sessionId: string,
-  snapshot: ConversationSnapshot | null,
-): ConversationSnapshot | null {
-  return snapshot?.sessionId === sessionId ? snapshot : null;
-}
-
-export function resolveV4ElicitationRequest(
-  projected: ZCodeElicitationRequest | null,
-  botProgress: ZCodeElicitationRequest | null,
-): ZCodeElicitationRequest | null {
-  // Bugfix：V4 snapshot 只保留原始阻塞请求，Bot 代答后的逐题进度必须覆盖同一 request 的投影。
-  if (projected && botProgress?.requestId === projected.requestId) {
-    return botProgress;
-  }
-  return projected;
-}
+export { getCurrentSessionInteractionSnapshot, resolveV4ElicitationRequest };
 
 export { buildV4ElicitationProgressKey } from "@/v4/V4ElicitationDialog.js";
 
@@ -110,6 +97,12 @@ export function V4InteractionDialogs({
         interaction.payload.kind === "permission" || interaction.payload.kind === "userInput",
     ) ?? null;
   const documentVisible = useInteractionDocumentVisible();
+  const genericCardRef = useRef<HTMLDivElement | null>(null);
+  useTaskInteractionReveal(
+    { workspacePath, workspaceIdentity, sessionId, interactionId: pending?.interactionId },
+    isActive && documentVisible,
+    genericCardRef,
+  );
   const activeVisibilityRef = useRef(isActive && documentVisible);
   activeVisibilityRef.current = isActive && documentVisible;
   const workspaceHookReview = currentSnapshot?.pendingInteractions.find(
@@ -303,14 +296,7 @@ export function V4InteractionDialogs({
     }
   }, [pending?.autoResolution, pending?.interactionId, sendSnoozeOnce]);
 
-  if (!pending || !isActive || !documentVisible) {
-    return null;
-  }
-
-  // workspaceHookReview 只能由 Settings/Hooks 行内 Trust 处理；绝不降级成通用 Dialog。
-  if (pending.payload.kind === "workspaceHookReview") {
-    return null;
-  }
+  if (!pending) return null;
 
   if (pending.payload.kind === "permission") {
     const request = pendingPermissionToLegacyRequest(sessionId, {
@@ -318,44 +304,50 @@ export function V4InteractionDialogs({
       payload: pending.payload,
     });
     return (
-      // 连续 permission 会复用输入框焦点状态，按 interaction 重建。
-      <PermissionDialog
-        key={pending.interactionId}
-        request={request}
-        workspacePath={workspacePath}
-        {...(workspaceIdentity === undefined ? {} : { workspaceIdentity })}
-        {...(remoteSessionId === undefined ? {} : { remoteSessionId })}
-        {...(workflowSessionModel === undefined ? {} : { workflowSessionModel })}
-        isWebRemoteControl={isWebRemoteControl}
-        provider={provider}
-        responding={
-          permissionResponse?.interactionId === pending.interactionId && permissionResponse.pending
-        }
-        responseError={
-          permissionResponse?.interactionId === pending.interactionId && permissionResponse.failed
-            ? intl.formatMessage({ id: "chat.permission.responseFailed" })
-            : undefined
-        }
-        onRespond={(_requestId, option: ZCodePermissionOption, feedback, content) => {
-          if (permissionResponseFlight.current === pending.interactionId) return;
-          const interactionId = pending.interactionId;
-          permissionResponseFlight.current = interactionId;
-          setPermissionResponse({ interactionId, pending: true, failed: false });
-          // content：工作流确认窗里改过的设置，只在放行应答上（docs/dynamic-workflow/launch.md
-          // 「Adjusting the settings in the window」）。
-          void resolveInteraction(interactionId, {
-            optionId: option.optionId,
-            ...(feedback ? { freeText: feedback } : {}),
-            ...(content === undefined ? {} : { content }),
-          }).then((accepted) => {
-            if (permissionResponseFlight.current !== interactionId) return;
-            permissionResponseFlight.current = null;
-            setPermissionResponse({ interactionId, pending: false, failed: !accepted });
-          });
-        }}
-      />
+      <div ref={genericCardRef} tabIndex={-1} className="outline-none">
+        {/* 连续 permission 会复用输入框焦点状态，按 interaction 重建。 */}
+        <PermissionDialog
+          key={pending.interactionId}
+          request={request}
+          autoFocus={isActive && documentVisible}
+          workspacePath={workspacePath}
+          workspaceIdentity={workspaceIdentity}
+          remoteSessionId={remoteSessionId}
+          workflowSessionModel={workflowSessionModel}
+          isWebRemoteControl={isWebRemoteControl}
+          provider={provider}
+          responding={
+            permissionResponse?.interactionId === pending.interactionId &&
+            permissionResponse.pending
+          }
+          responseError={
+            permissionResponse?.interactionId === pending.interactionId && permissionResponse.failed
+              ? intl.formatMessage({ id: "chat.permission.responseFailed" })
+              : undefined
+          }
+          onRespond={(_requestId, option: ZCodePermissionOption, feedback, content) => {
+            if (permissionResponseFlight.current === pending.interactionId) return;
+            const interactionId = pending.interactionId;
+            permissionResponseFlight.current = interactionId;
+            setPermissionResponse({ interactionId, pending: true, failed: false });
+            // content：工作流确认窗里改过的设置，只在放行应答上（docs/dynamic-workflow/launch.md
+            // 「Adjusting the settings in the window」）。
+            void resolveInteraction(interactionId, {
+              optionId: option.optionId,
+              ...(feedback ? { freeText: feedback } : {}),
+              ...(content === undefined ? {} : { content }),
+            }).then((accepted) => {
+              if (permissionResponseFlight.current !== interactionId) return;
+              permissionResponseFlight.current = null;
+              setPermissionResponse({ interactionId, pending: false, failed: !accepted });
+            });
+          }}
+        />
+      </div>
     );
   }
+
+  if (pending.payload.kind !== "userInput") return null;
 
   const projectedElicitationRequest = pendingUserInputToElicitationRequest(sessionId, {
     ...pending,
@@ -381,8 +373,7 @@ export function V4InteractionDialogs({
         workspacePath={workspacePath}
         workspaceIdentity={workspaceIdentity}
         sessionId={sessionId}
-        isPlanApproval={isExitPlanMode}
-        canRestoreFocus={() => activeVisibilityRef.current}
+        autoFocus={isActive && documentVisible}
         request={
           isExitPlanMode
             ? {
@@ -433,11 +424,15 @@ export function V4InteractionDialogs({
     payload: pending.payload,
   });
   return (
-    <V4UserInputDialog
-      model={model}
-      onSubmit={(answer) => {
-        void resolveInteraction(pending.interactionId, answer);
-      }}
-    />
+    <div ref={genericCardRef} tabIndex={-1} className="outline-none">
+      <V4UserInputDialog
+        key={pending.interactionId}
+        model={model}
+        autoFocus={isActive && documentVisible}
+        onSubmit={(answer) => {
+          void resolveInteraction(pending.interactionId, answer);
+        }}
+      />
+    </div>
   );
 }

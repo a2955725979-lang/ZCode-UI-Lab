@@ -354,7 +354,7 @@ describe("ElicitationDialog", () => {
     expect(html).toContain("flex shrink-0 items-center justify-between");
   });
 
-  it("手机端阻塞弹窗提供整卡折叠入口并标记可隐藏内容", () => {
+  it("整卡折叠入口在所有宽度生效并标记可隐藏内容", () => {
     const Dialog = ElicitationDialog as ComponentType<Record<string, unknown>>;
     const html = renderToStaticMarkup(
       createElement(
@@ -367,9 +367,9 @@ describe("ElicitationDialog", () => {
       ),
     );
 
-    expect(html).toContain('aria-label="折叠问题弹窗"');
+    expect(html).toMatch(/aria-label="(?:折叠问题弹窗|收起问题)"/);
     expect(html).toContain('aria-expanded="true"');
-    expect(html).toContain("max-md:inline-flex");
+    expect(html).not.toContain("onClick={() =&gt; setIsDialogExpanded");
     expect(html).toContain('data-elicitation-dialog-body="true"');
     expect(html).toContain('data-elicitation-dialog-footer="true"');
   });
@@ -438,20 +438,21 @@ describe("ElicitationDialog", () => {
     expect(zhHtml).not.toContain("Exit plan mode and start implementation.");
   });
 
-  it("普通文本 Enter 换行、Esc 稍后回答，并避开输入法组词态", () => {
+  it("普通文本 Enter 推进、Shift+Enter 换行、Esc 折叠，并避开输入法组词态", () => {
     expect(
       resolveElicitationCustomInputKeyAction({
         key: "Enter",
         advanceKind: "next",
       }),
-    ).toBeNull();
+    ).toBe("advance");
     expect(
       resolveElicitationCustomInputKeyAction({
         key: "Enter",
         advanceKind: "submit",
       }),
-    ).toBeNull();
-    expect(resolveElicitationCustomInputKeyAction({ key: "Enter" })).toBeNull();
+    ).toBe("advance");
+    expect(resolveElicitationCustomInputKeyAction({ key: "Enter" })).toBe("advance");
+    expect(resolveElicitationCustomInputKeyAction({ key: "Enter", shiftKey: true })).toBeNull();
     expect(resolveElicitationCustomInputKeyAction({ key: "Enter", ctrlKey: true })).toBe("submit");
     expect(resolveElicitationCustomInputKeyAction({ key: "Enter", metaKey: true })).toBe("submit");
     expect(

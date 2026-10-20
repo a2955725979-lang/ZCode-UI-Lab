@@ -24,18 +24,18 @@ describe("shared keyboard focus stylesheet", () => {
     }
   });
 
-  it("provides a theme-token keyboard outline and a forced-colors system outline", () => {
+  it("provides a focused-input token button outline and a forced-colors system outline", () => {
     expect(stylesheet).toMatch(
-      /\):focus-visible\s*\{\s*outline:\s*2px solid var\(--color-foreground-subtle\);\s*outline-offset:\s*2px;/,
+      /\):focus-visible\s*\{\s*outline:\s*2px solid var\(--color-input-border-focused\);\s*outline-offset:\s*1px;/,
     );
     expect(stylesheet).toMatch(
       /@media \(forced-colors: active\)[\s\S]+?outline-color:\s*Highlight;/,
     );
   });
 
-  it("uses a single inset focus indicator for shared fields and group shells", () => {
+  it("uses only focused field borders/backgrounds and keeps row focus backgrounds", () => {
     expect(stylesheet).toMatch(
-      /\[data-slot="input"\][\s\S]+?outline:\s*1px solid var\(--color-foreground-subtle\);\s*outline-offset:\s*-1px;/,
+      /\[data-slot="input"\][\s\S]+?outline:\s*none;\s*border-color:\s*var\(--color-input-border-focused\);\s*background-color:\s*var\(--color-input-focused\);/,
     );
     expect(stylesheet).toContain(
       '[data-slot="select-trigger"][data-variant="input"]:focus-visible',
@@ -43,7 +43,11 @@ describe("shared keyboard focus stylesheet", () => {
     expect(stylesheet).toContain(
       '[data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible)',
     );
-    expect(stylesheet).toContain("outline-color: var(--color-destructive)");
+    expect(stylesheet).toContain("border-color: var(--color-destructive)");
+    expect(stylesheet).toMatch(
+      /:not\(\s*\[role="option"\],\s*\[role="menuitem"\],\s*\[role="checkbox"\]/,
+    );
+    expect(stylesheet).not.toContain("outline-offset: -1px");
     expect(stylesheet).toMatch(
       /@media \(forced-colors: active\)[\s\S]+?outline:\s*2px solid Highlight;\s*outline-offset:\s*2px;/,
     );
