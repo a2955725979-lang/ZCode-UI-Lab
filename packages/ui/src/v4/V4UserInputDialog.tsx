@@ -93,10 +93,11 @@ export function V4UserInputDialog({
     onSubmit(model.freeText ? { freeText: trimmed } : { optionId: model.options[0]?.optionId });
   }, [freeText, model.freeText, model.options, onSubmit, responding]);
 
+  // 原因：队列用负 margin 延伸 blur 背景；通用输入卡沿用权限/问答的前景层，避免标题被覆盖。
   return (
     <div
       ref={cardRef}
-      className="flex w-full flex-col gap-3 rounded-2xl border border-border bg-popover p-3 shadow-xs"
+      className="relative z-1 flex w-full flex-col gap-3 rounded-2xl border border-border bg-popover p-3 shadow-xs"
       data-testid={TID_V4_USER_INPUT_DIALOG}
       aria-busy={responding}
     >

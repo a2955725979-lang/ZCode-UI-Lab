@@ -308,7 +308,7 @@ describe("V4 ordinary question presentation and response lifecycle", () => {
     expect(sendCommand.mock.calls[0]?.[0].payload.answer.action).toBe("decline");
     outside.remove();
   });
-  it("keeps sensitive userInput inline, accessible and IME-safe without changing its answer channel", async () => {
+  it("keeps sensitive userInput inline, in the foreground, accessible and IME-safe without changing its answer channel", async () => {
     const state = snapshot(`sensitive-${serial}`);
     state.pendingInteractions[0]!.payload = {
       kind: "userInput",
@@ -317,6 +317,9 @@ describe("V4 ordinary question presentation and response lifecycle", () => {
       sensitive: true,
     };
     const view = render(ui(state));
+    const card = view.container.querySelector('[data-testid="v4-user-input-dialog"]')!;
+    expect(card.classList.contains("relative")).toBe(true);
+    expect(card.classList.contains("z-1")).toBe(true);
     const input = view.container.querySelector<HTMLInputElement>('input[type="password"]')!;
     expect(input.getAttribute("aria-label")).toBe("输入密码");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
