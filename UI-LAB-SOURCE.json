@@ -1,0 +1,24 @@
+{
+  "upstream": "https://github.com/zai-org/ZCode",
+  "upstreamCommit": "aac4755666d09fdcd70272fcf063c077a639015f",
+  "upstreamVersion": "3.15.1",
+  "snapshotDate": "2026-10-20",
+  "kind": "unofficial personal UI Lab source snapshot",
+  "canonicalSourceFiles": 16949,
+  "localCustomChanges": 249,
+  "sourceTransforms": [
+    "README.md receives a derivative notice; original content retained.",
+    "Distribution instructions, validation summary, provenance, and packaging/ are added.",
+    "Portable Electron bootstrap replaces machine-specific external development launcher/guardian; their hardcoded paths and runtime data are not distributed."
+  ],
+  "excluded": [
+    "original .git history",
+    "node_modules",
+    "out and retained build backups",
+    "accounts and credentials",
+    "personal configuration and instructions",
+    "conversation databases and drafts",
+    "caches and raw audit/runtime logs",
+    "original application bundle"
+  ]
+}

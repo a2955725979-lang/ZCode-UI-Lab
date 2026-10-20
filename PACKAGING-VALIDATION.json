@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-20",
+  "platform": "darwin-arm64",
+  "upstreamVersion": "3.15.1",
+  "appId": "dev.zcode.app.ui-lab.portable",
+  "artifactSha256": "813a7ec37e8cbc56291950020c0f17e78e13baea8f45607839691341a6e2ba06",
+  "sourceSnapshot": {
+    "canonicalFiles": 16949,
+    "copiedHashMismatches": 0,
+    "activeReleaseHashMismatches": 0,
+    "modifiedTracked": 180,
+    "addedUntracked": 69,
+    "historicalGitIncluded": false
+  },
+  "static": {
+    "urlSchemes": [],
+    "externalBundleSymlinks": 0,
+    "privateRuntimeDirectories": 0,
+    "hardcodedPrivateSourcePaths": false,
+    "requiredLicensesPreserved": true,
+    "autoUpdateFeedPresent": false
+  },
+  "checks": {
+    "typecheckExitCode": 0,
+    "lintExitCode": 0,
+    "lintWarnings": 62,
+    "lintErrors": 0,
+    "packagingBoundaryTests": {
+      "node24.12.0": {
+        "passed": 10,
+        "failed": 0
+      },
+      "node24.14.0": {
+        "passed": 10,
+        "failed": 0
+      }
+    }
+  },
+  "realUnpackedAppSmoke": {
+    "cases": [
+      {
+        "name": "exact-new-app-identity",
+        "status": "PASS"
+      },
+      {
+        "name": "new-isolated-test-data",
+        "status": "PASS"
+      },
+      {
+        "name": "no-preview-server-dependency",
+        "status": "PASS"
+      },
+      {
+        "name": "debug-only-loopback",
+        "status": "PASS"
+      },
+      {
+        "name": "real-renderer-and-preload",
+        "status": "PASS"
+      },
+      {
+        "name": "host-local-services-ready",
+        "status": "PASS"
+      },
+      {
+        "name": "empty-or-login-business-ui",
+        "status": "PASS"
+      }
+    ],
+    "freshData": true,
+    "rendererScheme": "file",
+    "preloadReady": true,
+    "hostReady": true,
+    "normalQuit": true,
+    "exitCode": 0,
+    "remainingTestProcesses": 0,
+    "remainingTestDebugListeners": 0,
+    "taskSessionMessageInputUsageRows": 0,
+    "modelMessagesSent": 0,
+    "loginPerformed": false,
+    "permissionsChanged": false
+  },
+  "retainedFailures": [
+    "First builder attempt: local unpacked Electron license staging missing; fixed in isolated packaging hook using same-version original texts.",
+    "Second builder attempt: placeholder CUA Koffi validation lacked producer gate; bounded packaging patch retains all checks for actual producer.",
+    "First smoke probe: outdated log directory path and premature startup observation; preserved as failure, not counted as business ready.",
+    "Initial Node 24.12 test cleanup rejected a directory symlink; cleanup fixed with unlink, boundary assertions unchanged."
+  ],
+  "notTested": [
+    "真实登录",
+    "发送消息和Agent执行",
+    "Computer Use",
+    "Gatekeeper下载隔离后的首次运行",
+    "Intel/Windows/Linux",
+    "全部产品回归",
+    "长时性能",
+    "完整VoiceOver",
+    "极端故障恢复"
+  ],
+  "signing": {
+    "developerIDSigned": false,
+    "appleNotarized": false,
+    "gatekeeperDisabled": false
+  },
+  "privacyScanLimit": "Pattern scanning and archive checks are bounded checks, not a guarantee of detecting every secret format.",
+  "computerUse": "Not available: checked-in open-source placeholder; permission status UI issue remains."
+}

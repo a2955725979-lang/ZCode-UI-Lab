@@ -1,0 +1,10 @@
+--- a/packages/desktop/electron-builder.config.js
++++ b/packages/desktop/electron-builder.config.js
+@@ -491,6 +491,7 @@
+ function assertPackagedCuaKoffi(context) {
++  if (!shouldPackageComputerUseHelper) return;
+   const problems = verifyStagedKoffi({
+     resourcesDir: resolvePackagedResourcesDir(context),
+     targetPlatform,
+   });
+   if (problems.length > 0) {
