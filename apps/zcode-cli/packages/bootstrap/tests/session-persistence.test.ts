@@ -2002,6 +2002,7 @@ describe("session persistence", () => {
         },
         {
           content: "created AGENTS",
+          parts: [{ text: "created AGENTS", type: "text" }],
           role: "agent",
         },
       ]);
@@ -2712,6 +2713,7 @@ describe("session persistence", () => {
         },
         {
           content: "first answer",
+          parts: [{ text: "first answer", type: "text" }],
           role: "agent",
         },
       ]);

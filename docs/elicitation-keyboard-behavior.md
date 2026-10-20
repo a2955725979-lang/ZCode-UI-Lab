@@ -43,8 +43,12 @@ runtime pending interaction → inline dock card → edit local drafts
   Ctrl+Enter / Cmd+Enter anywhere submits the actual partial answers. IME composition never
   navigates or submits, including Enter candidate confirmation. Tab keeps browser natural order.
 - Escape toggles expansion without responding. The header collapse control works at every width.
-  A collapsed card shows only a question summary, question count and expand control. Collapse and
-  expansion report first interaction as navigation, pausing automatic continuation. Drafts survive.
+  The card container is programmatically focusable, without becoming an extra Tab stop or acquiring
+  the ordinary button outline. A collapsed card has one full-width button containing the question
+  summary, question count and expand icon. Question-text expansion and card expansion have distinct
+  accessible labels. Collapse and expansion report first interaction as navigation, pausing automatic
+  continuation. Drafts survive. Keyboard hints are hidden in mobile text-input viewports and on
+  devices without hover.
 - The footer has Skip (ghost) and Continue / Submit (brand). Skip sends the existing empty-answer
   continuation protocol. Partial answers omit unanswered keys; no preference is invented.
 - Submission disables all controls and shows Submitting. A failure shows one error line and retains
@@ -54,8 +58,20 @@ runtime pending interaction → inline dock card → edit local drafts
   string without a Markdown/HTML content type. Free input retains its question aria-label.
 - Auto-resolution defaults off. First interaction still pauses it, including late durable event arrival.
 - Unstructured userInput uses the same inline popover card; sensitive inputs remain password fields.
+  Its existing V4InteractionDialogs owner admits one response at a time per workspace/session/
+  interaction scope. Pending submissions disable its inputs and buttons and show Submitting; a
+  rejected ACK or transport failure retains the input and permits an explicit retry. A late response
+  cannot change feedback for another scope. This does not change permission response handling or
+  the resolveInteraction answer/ACK protocol.
 
 ## Approval boundaries
+
+The focused SessionPane owns the global Escape-to-stop listener. It ignores events whose composed
+path includes its existing interactionFocusBoundaryRef, in addition to already prevented and dialog
+events. Permission option rows need not acquire a new Escape action merely to avoid the global
+shortcut. Card-local handlers still run normally (including ExitPlanMode decline); a composer outside
+that exact boundary still stops generation. A row role or another pane's boundary alone is not an
+exemption. No interaction answer, pending order or permission protocol changes.
 
 Permission requests retain `PermissionDialog` options, freeText and workflow Refine. ExitPlanMode
 retains approval semantics: no ordinary Skip action, Escape declines, bare Enter in feedback submits,

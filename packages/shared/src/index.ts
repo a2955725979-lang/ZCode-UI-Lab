@@ -359,3 +359,22 @@ export {
   isRequestSecurityFailure,
 } from "./request-security-edition/policy.js";
 export * from "./request-security-edition/verification-policy.js";
+
+export {
+  extractAssistantDirectives,
+  findMarkdownCodeRanges,
+  overlapsAssistantTextRanges,
+  findUnclosedAssistantDirectiveStart,
+  findAssistantDirectivePrefixStart,
+} from "./assistant-directive-parser.js";
+export type {
+  ParsedAssistantDirective,
+  AssistantTextRange,
+  AssistantDirectiveSyntaxOptions,
+  AssistantDirectivePrefixOptions,
+} from "./assistant-directive-parser.js";
+export {
+  parseFollowupSuggestions,
+  stripFollowupSuggestionDirectives,
+} from "./followup-suggestions.js";
+export type { FollowupSuggestion } from "./followup-suggestions.js";

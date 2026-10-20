@@ -342,6 +342,7 @@ export function createSessionFacade(deps: CreateSessionFacadeDeps): SessionFacad
     getThoughtLevel: () => deps.runtime.getSessionModelSelection()?.options?.reasoningLevel,
     loadSessionTranscript: async () =>
       await loadSessionTranscriptFromStore({
+        preserveTextParts: true,
         sessionId: deps.sessionId,
         sessionStore: deps.sessionStore,
       }),

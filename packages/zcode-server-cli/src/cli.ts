@@ -17,7 +17,6 @@ import {
   validateUninstallTarget,
 } from "./runtime/paths.js";
 import { validateServerInstallOwnership } from "./runtime/installationOwnership.js";
-import { createReleaseAgentWiring, type BundledAgentWiring } from "./runtime/agentWiring.js";
 import { writeStableLauncher } from "./runtime/stableLauncher.js";
 import { runUpdateCommand } from "./runtime/updateCommand.js";
 import { DataRootLock } from "./runtime/lock.js";
@@ -40,10 +39,6 @@ export interface CliIO {
   stderr?: { write(value: string): void };
   confirm?: (prompt: string) => Promise<string>;
   legacyDelegate?: (argv: readonly string[]) => Promise<number>;
-}
-
-export interface ServerCliRuntimeOptions {
-  bundledAgentWiring?: BundledAgentWiring | null;
 }
 
 const stdout = (io: CliIO, value: unknown): void =>
@@ -72,11 +67,7 @@ export function shouldRegisterService(
   return daemonRequested && !supervisorProcess;
 }
 
-export async function runServerCli(
-  argv: readonly string[],
-  io: CliIO = {},
-  runtimeOptions: ServerCliRuntimeOptions = {},
-): Promise<number> {
+export async function runServerCli(argv: readonly string[], io: CliIO = {}): Promise<number> {
   const json = argv.includes("--json");
   try {
     const parsed = parseServerCliArguments(argv);
@@ -91,7 +82,7 @@ export async function runServerCli(
       : parsed.layout;
     switch (command) {
       case "serve":
-        return await runServe(parsed.argv.slice(1), io, json, layout, runtimeOptions);
+        return await runServe(parsed.argv.slice(1), io, json, layout);
       case "status":
       case "stop":
       case "restart":
@@ -139,7 +130,6 @@ async function runServe(
   io: CliIO,
   json: boolean,
   layout: ReturnType<typeof resolveServerLayout>,
-  runtimeOptions: ServerCliRuntimeOptions,
 ): Promise<number> {
   const daemonRequested = args.includes("--daemon");
   const supervisorProcess = args.includes("--supervisor");
@@ -257,14 +247,10 @@ async function runServe(
           ZCODE_DATA_BASE_DIR: layout.dataBaseDir,
           ZCODE_SERVER_ROOT: layout.serverRoot,
         };
-        const releaseWiring = runtimeRoot
-          ? createReleaseAgentWiring(runtimeRoot, runtimeNode, inheritedEnv)
-          : runtimeOptions.bundledAgentWiring;
         return fork(corePath, [String(generation)], {
           execPath: runtimeNode,
           env: {
             ...inheritedEnv,
-            ...releaseWiring,
             ...(runtimeRoot ? { ZCODE_SERVER_RUNTIME_ROOT: runtimeRoot } : {}),
           },
           stdio: ["ignore", "ignore", "ignore", "ipc"],

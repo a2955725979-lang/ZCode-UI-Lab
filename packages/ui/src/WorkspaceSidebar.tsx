@@ -1326,7 +1326,7 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebarComponent({
                 </Button>
               </ControlHintTooltip>
             ) : null}
-            {showTaskViewFilter ? (
+            {showTaskViewFilter || !isChatMode ? (
               <DropdownMenu>
                 <ControlHintTooltip
                   title={intl.formatMessage({
@@ -1348,6 +1348,32 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebarComponent({
                   </DropdownMenuTrigger>
                 </ControlHintTooltip>
                 <DropdownMenuContent align="end" className="w-48 min-w-48">
+                  {!isChatMode ? (
+                    <>
+                      <DropdownMenuLabel>
+                        {intl.formatMessage({ id: "chatWorkspace.historyFilter" })}
+                      </DropdownMenuLabel>
+                      <DropdownMenuRadioGroup
+                        aria-label={intl.formatMessage({ id: "chatWorkspace.historyFilter" })}
+                        data-history-filter={historyFilter}
+                        value={historyFilter}
+                        onValueChange={(value) => {
+                          if (value === "all" || value === "chat" || value === "work") {
+                            setHistoryFilter(value);
+                          }
+                        }}
+                      >
+                        {(["all", "chat", "work"] as const).map((filter) => (
+                          <DropdownMenuRadioItem key={filter} value={filter}>
+                            {intl.formatMessage({ id: `chatWorkspace.${filter}` })}
+                          </DropdownMenuRadioItem>
+                        ))}
+                      </DropdownMenuRadioGroup>
+                      {showWorkspaceViewOptions || showTaskSortOptions ? (
+                        <DropdownMenuSeparator />
+                      ) : null}
+                    </>
+                  ) : null}
                   {showWorkspaceViewOptions ? (
                     <>
                       <DropdownMenuLabel>
@@ -1444,6 +1470,9 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebarComponent({
       handleToggleAllTaskGroups,
       handleWorkspaceTaskViewChange,
       intl,
+      isChatMode,
+      historyFilter,
+      setHistoryFilter,
       isWebRemoteControlSidebar,
       primaryTaskIndicatorStyle,
       showArchivedTasks,
@@ -1610,60 +1639,62 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebarComponent({
               )}
               style={workspaceScrollMaskStyle}
             >
-              <div className="flex items-center justify-between gap-1 px-3">
-                <span className="min-w-0 truncate text-ui-sm font-medium text-foreground-subtle">
-                  {intl.formatMessage({ id: "chatWorkspace.history" })}
-                </span>
-                <div className="flex shrink-0 items-center gap-1">
-                  <div
-                    role="group"
-                    aria-label={intl.formatMessage({ id: "chatWorkspace.historyFilter" })}
-                    className="flex items-center rounded-md bg-surface p-0.5"
-                    data-history-filter={historyFilter}
-                  >
-                    {(["all", "chat", "work"] as const).map((filter) => (
-                      <Button
-                        key={filter}
-                        type="button"
-                        variant="ghost"
-                        size="xs"
-                        aria-pressed={historyFilter === filter}
-                        className={cn(
-                          "px-1.5 text-ui-xs",
-                          historyFilter === filter
-                            ? "bg-selected text-foreground"
-                            : "text-foreground-subtle",
-                        )}
-                        onClick={() => setHistoryFilter(filter)}
-                      >
-                        {intl.formatMessage({ id: `chatWorkspace.${filter}` })}
-                      </Button>
-                    ))}
+              {isChatMode ? (
+                <div className="flex items-center justify-between gap-1 px-3">
+                  <span className="min-w-0 truncate text-ui-sm font-medium text-foreground-subtle">
+                    {intl.formatMessage({ id: "chatWorkspace.history" })}
+                  </span>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <div
+                      role="group"
+                      aria-label={intl.formatMessage({ id: "chatWorkspace.historyFilter" })}
+                      className="flex items-center rounded-md bg-surface p-0.5"
+                      data-history-filter={historyFilter}
+                    >
+                      {(["all", "chat", "work"] as const).map((filter) => (
+                        <Button
+                          key={filter}
+                          type="button"
+                          variant="ghost"
+                          size="xs"
+                          aria-pressed={historyFilter === filter}
+                          className={cn(
+                            "px-1.5 text-ui-xs",
+                            historyFilter === filter
+                              ? "bg-selected text-foreground"
+                              : "text-foreground-subtle",
+                          )}
+                          onClick={() => setHistoryFilter(filter)}
+                        >
+                          {intl.formatMessage({ id: `chatWorkspace.${filter}` })}
+                        </Button>
+                      ))}
+                    </div>
+                    {isChatMode ? (
+                      <>
+                        {chatHistoryArchived ? (
+                          <div
+                            ref={setArchivedActionsContainer}
+                            data-testid="archived-tasks-toolbar-actions"
+                            className="flex shrink-0 items-center"
+                          />
+                        ) : null}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-pressed={chatHistoryArchived}
+                          aria-label={intl.formatMessage({ id: "chatWorkspace.archived" })}
+                          title={intl.formatMessage({ id: "chatWorkspace.archived" })}
+                          onClick={() => setChatHistoryArchived((current) => !current)}
+                        >
+                          <Archive className="size-3.5" />
+                        </Button>
+                      </>
+                    ) : null}
                   </div>
-                  {isChatMode ? (
-                    <>
-                      {chatHistoryArchived ? (
-                        <div
-                          ref={setArchivedActionsContainer}
-                          data-testid="archived-tasks-toolbar-actions"
-                          className="flex shrink-0 items-center"
-                        />
-                      ) : null}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-pressed={chatHistoryArchived}
-                        aria-label={intl.formatMessage({ id: "chatWorkspace.archived" })}
-                        title={intl.formatMessage({ id: "chatWorkspace.archived" })}
-                        onClick={() => setChatHistoryArchived((current) => !current)}
-                      >
-                        <Archive className="size-3.5" />
-                      </Button>
-                    </>
-                  ) : null}
                 </div>
-              </div>
+              ) : null}
               {!isChatMode && !isWebRemoteControlSidebar ? workspaceTaskToolbar() : null}
               {(isChatMode && !isWebRemoteControlSidebar) || shouldShowPinnedTasks ? (
                 // 归档切换主任务区时不应隐藏 pinned。

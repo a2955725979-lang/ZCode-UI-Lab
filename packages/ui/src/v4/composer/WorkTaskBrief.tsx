@@ -1,5 +1,5 @@
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import { Textarea } from "@/components/ui/textarea.js";
+import { Input } from "@/components/ui/input.js";
 import type { WorkTaskStartFields } from "./composerDraftStore.js";
 
 export const EMPTY_WORK_TASK_START: WorkTaskStartFields = {
@@ -38,14 +38,13 @@ export function WorkTaskBrief({
       {(["outcome", "deliverable", "constraints"] as const).map((key) => (
         <label key={key} className="min-w-0 space-y-1 text-ui-sm text-foreground-subtle">
           <span>{intl.formatMessage({ id: `chat.workBrief.${key}` })}</span>
-          <Textarea
+          <Input
             data-testid={`work-task-brief-${key}`}
             aria-label={intl.formatMessage({ id: `chat.workBrief.${key}` })}
             placeholder={intl.formatMessage({ id: `chat.workBrief.${key}.placeholder` })}
             value={fields[key]}
             disabled={disabled}
             onChange={(event) => onChange({ ...fields, [key]: event.target.value })}
-            className="min-h-16 resize-y"
           />
         </label>
       ))}

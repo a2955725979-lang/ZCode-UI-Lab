@@ -34,7 +34,7 @@ import {
   pendingUserInputToViewModel,
 } from "@/v4/pendingInteractionAdapter.js";
 import { useTaskInteractionReveal } from "@/v4/taskAttentionNavigation.js";
-import { V4UserInputDialog } from "@/v4/V4UserInputDialog.js";
+import { V4UserInputDialog, useUserInputResponse } from "@/v4/V4UserInputDialog.js";
 import { useV4Conversation } from "@/v4/V4ConversationContext.js";
 
 export { createInteractionAutoResolutionIntentTracker } from "@/v4/V4ElicitationDialog.js";
@@ -214,6 +214,11 @@ export function V4InteractionDialogs({
       }
     },
     [onCommandSettled, sendCommand, sessionId, workspacePath, workspaceIdentity],
+  );
+
+  const userInputResponse = useUserInputResponse(
+    buildV4InteractionScopeKey(workspacePath, workspaceIdentity, sessionId, pending?.interactionId ?? ""),
+    (answer) => pending ? resolveInteraction(pending.interactionId, answer) : Promise.resolve(false),
   );
 
   const snoozeAutoResolution = useCallback(
@@ -419,19 +424,16 @@ export function V4InteractionDialogs({
     );
   }
 
-  const model = pendingUserInputToViewModel({
-    ...pending,
-    payload: pending.payload,
-  });
+  const model = pendingUserInputToViewModel({ ...pending, payload: pending.payload });
   return (
     <div ref={genericCardRef} tabIndex={-1} className="outline-none">
       <V4UserInputDialog
-        key={pending.interactionId}
+        key={userInputResponse.scopeKey}
         model={model}
         autoFocus={isActive && documentVisible}
-        onSubmit={(answer) => {
-          void resolveInteraction(pending.interactionId, answer);
-        }}
+        responding={userInputResponse.responding}
+        responseFailed={userInputResponse.failed}
+        onSubmit={userInputResponse.onSubmit}
       />
     </div>
   );

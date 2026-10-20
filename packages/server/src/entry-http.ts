@@ -1,5 +1,6 @@
 import {
   createLocalServices,
+  createStandaloneWebZCodeAgentCommandResolver,
   createTopicResourcePeers,
   getAppConfigDir,
 } from "@zcode/services/node";
@@ -21,6 +22,7 @@ async function main(): Promise<void> {
   const topicResourcePeers = createTopicResourcePeers();
   const services = createLocalServices({
     standaloneWebHost: true,
+    zcodeAgentCommandResolver: createStandaloneWebZCodeAgentCommandResolver(),
     topicResourceRelayChannel: (request) => topicResourcePeers.getChannel(request),
     zcodeBuiltinProviderConfigFilePath,
     providerProvisioningTargetEnabled: Boolean(authToken),

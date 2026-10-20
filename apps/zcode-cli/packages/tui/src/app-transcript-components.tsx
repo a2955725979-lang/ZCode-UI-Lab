@@ -1,6 +1,7 @@
 import React from "react";
 import type { TuiCopy } from "@zcode/i18n";
-import type { Message } from "./app-model.js";
+import { stripFollowupSuggestionDirectives } from "@zcode/shared";
+import type { Message, TextTranscriptPart, TranscriptPart } from "./app-model.js";
 import { palette } from "./app-model.js";
 import { EmptyTranscriptLogo } from "./app-empty-transcript.js";
 import { DEFAULT_TUI_COPY } from "./app-locale.js";
@@ -106,7 +107,7 @@ export function MessageRow({
   terminalWidth?: number;
   workflowCardsByToolCallId?: ReadonlyMap<string, TuiWorkflowCard>;
 }): React.ReactElement {
-  const parts = message.parts ?? [];
+  const { content, parts } = projectAgentBody(message);
   if (message.role === "timeline") {
     return h(CompactTimelineRow, { copy, message, terminalWidth });
   }
@@ -131,17 +132,17 @@ export function MessageRow({
         width: "100%",
       },
     },
-    ...(assistantText && parts.length === 0
+    ...(assistantText && parts.length === 0 && content
       ? [
           h(MarkdownText, {
             backgroundColor: rowBackground,
-            content: message.content,
+            content,
             key: "content",
             streaming: message.streaming,
           }),
         ]
-      : parts.length === 0
-        ? [h("text", { key: "content", style: { fg: plainTextColor } }, message.content)]
+      : !assistantText && parts.length === 0
+        ? [h("text", { key: "content", style: { fg: plainTextColor } }, content)]
         : []),
     ...parts.map((part, partIndex) => {
       if (part.type === "tool") {
@@ -182,6 +183,54 @@ export function MessageRow({
         : h("text", { key: `text-${partIndex}`, style: { fg: plainTextColor } }, part.text);
     }),
   );
+}
+
+function projectAgentBody(message: Message): { content: string; parts: TranscriptPart[] } {
+  const parts = message.parts ?? [];
+  if (message.role !== "agent") return { content: message.content, parts };
+  if (parts.length === 0) {
+    return {
+      content: stripFollowupSuggestionDirectives(message.content, { streaming: message.streaming }),
+      parts,
+    };
+  }
+
+  const textParts = parts.filter((part): part is TextTranscriptPart => part.type === "text");
+  // 回放 content 的双换行是旧显示格式，不能拿来识别指令：它可能凭空制造顶层行。
+  // 先拼原始 text parts 解析一次，JS 的 length/slice 保持同一 UTF-16 偏移口径。
+  const rawText = textParts.map((part) => part.text).join("");
+  const body = stripFollowupSuggestionDirectives(rawText, { streaming: message.streaming });
+  const stripped = body.length < rawText.length;
+  const aggregatedReplay =
+    !message.streamProjected &&
+    parts.every((part) => part.type === "text" && part.format === undefined) &&
+    message.content === textParts.map((part) => part.text).join("\n\n");
+  if (aggregatedReplay) {
+    let rawOffset = 0;
+    let displayOffset = 0;
+    let displayEnd = 0;
+    for (const part of textParts) {
+      const keptLength = Math.max(0, Math.min(part.text.length, body.length - rawOffset));
+      if (keptLength > 0) displayEnd = displayOffset + keptLength;
+      rawOffset += part.text.length;
+      displayOffset += part.text.length + 2;
+    }
+    return {
+      content: stripped ? message.content.slice(0, displayEnd) : message.content,
+      parts: [],
+    };
+  }
+
+  let offset = 0;
+  const projectedParts = parts.flatMap((part): TranscriptPart[] => {
+    if (part.type !== "text") return [part];
+    const text = stripped ? part.text.slice(0, Math.max(0, body.length - offset)) : part.text;
+    offset += part.text.length;
+    // restore 旧实现不显示空白 text 节点；保留它只为识别，不能新增可见空块。
+    if ((!message.streamProjected && !text.trim()) || (stripped && !text)) return [];
+    return text === part.text ? [part] : [{ ...part, text }];
+  });
+  return { content: projectedParts.length === 0 ? "" : message.content, parts: projectedParts };
 }
 
 function CompactTimelineRow({

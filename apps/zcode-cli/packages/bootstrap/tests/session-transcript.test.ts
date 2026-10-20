@@ -3,6 +3,48 @@ import type { MessageWithParts } from "@zcode/contracts";
 import { projectSessionTranscript } from "../src/session-transcript.js";
 
 describe("session transcript projection", () => {
+  it("preserves exact text parts only on opt-in without changing content or old omission rules", () => {
+    const messages = [
+      {
+        info: { role: "assistant" },
+        parts: [
+          { id: "first", text: "old overwritten value", type: "text" },
+          { id: "first", text: "正文😀", type: "text" },
+          { id: "space", text: "\r\n \r\n", type: "text" },
+          { id: "last", text: '::next-prompt{label="检查" prompt="检查结果"}', type: "text" },
+          { id: "ignored", ignored: true, text: "ignored", type: "text" },
+        ],
+      },
+      { info: { role: "assistant" }, parts: [{ id: "blank", text: " \n", type: "text" }] },
+      {
+        info: { role: "assistant", summary: true },
+        parts: [{ id: "summary", text: "hidden", type: "text" }],
+      },
+      { info: { role: "user" }, parts: [{ id: "user", text: "用户", type: "text" }] },
+    ] as unknown as MessageWithParts[];
+    const original = structuredClone(messages);
+    const content = '正文😀\n\n\r\n \r\n\n\n::next-prompt{label="检查" prompt="检查结果"}';
+    const expected = [
+      { content, role: "agent" },
+      { content: "用户", role: "user" },
+    ];
+    expect(projectSessionTranscript(messages)).toEqual(expected);
+    expect(projectSessionTranscript(messages, { preserveTextParts: false })).toEqual(expected);
+    expect(projectSessionTranscript(messages, { preserveTextParts: true })).toEqual([
+      {
+        content,
+        parts: [
+          { text: "正文😀", type: "text" },
+          { text: "\r\n \r\n", type: "text" },
+          { text: '::next-prompt{label="检查" prompt="检查结果"}', type: "text" },
+        ],
+        role: "agent",
+      },
+      { content: "用户", role: "user" },
+    ]);
+    expect(messages).toEqual(original);
+  });
+
   it("filters model-only goal continuation user inputs", () => {
     const transcript = projectSessionTranscript([
       {

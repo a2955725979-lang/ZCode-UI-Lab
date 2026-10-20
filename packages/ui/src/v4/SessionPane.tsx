@@ -630,6 +630,7 @@ export function SessionPane({
   searchResultHighlightRequest,
   onSearchResultHighlightDone,
 }: SessionPaneProps) {
+  const interactionFocusBoundaryRef = useRef<HTMLDivElement | null>(null);
   const {
     layer,
     sendCommand,
@@ -4503,7 +4504,7 @@ export function SessionPane({
     if (!sessionId || !snapshot?.control.canStop) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (shouldIgnoreEscapeForStopGeneration(event)) return;
+      if (shouldIgnoreEscapeForStopGeneration(event, interactionFocusBoundaryRef.current)) return;
       event.preventDefault();
       handleStop("escape");
     };
@@ -5377,7 +5378,6 @@ export function SessionPane({
     () => getLatestFollowupSuggestions(snapshot),
     [snapshot],
   );
-  const interactionFocusBoundaryRef = useRef<HTMLDivElement | null>(null);
   const composerNode = readOnly ? null : (
     <ConversationComposer
       key="conversation-composer"

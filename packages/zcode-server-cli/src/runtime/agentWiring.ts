@@ -1,48 +1,22 @@
-import { access } from "node:fs/promises";
-import { join } from "node:path";
+import { realpath, stat } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
-export interface BundledAgentWiring {
-  ZCODE_AGENT_SERVER_COMMAND: string;
-  ZCODE_AGENT_SERVER_ARGS_JSON: string;
-}
-
-export function createReleaseAgentWiring(
-  runtimeRoot: string,
-  runtimeNode: string,
-  env: Record<string, string | undefined>,
-): BundledAgentWiring | null {
-  if (env.ZCODE_AGENT_SERVER_COMMAND?.trim()) return null;
-  return {
-    ZCODE_AGENT_SERVER_COMMAND: runtimeNode,
-    ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify([
-      join(runtimeRoot, "zcode.cjs"),
-      "app-server",
-      "--stdio",
-    ]),
-  };
-}
-
-/**
- * 发行包内 Core 既不在 monorepo、也没有 Electron runtime，`zcodeAgentProcessManager`
- * 的默认解析链（monorepo dev → Electron → 远端已部署 binary）会全部落空。这里把随包
- * `zcode.cjs` 注入为 agent 启动命令；env 覆盖是该解析链的最高优先级，因此显式配置的
- * `ZCODE_AGENT_SERVER_COMMAND` 永远优先，开发态（入口同目录无 zcode.cjs）不受影响。
- */
-export async function resolveBundledAgentWiring(
+/** Core 自己定位当前 release 的 CLI，不把自动内置来源混入外部 command env。 */
+export async function resolveCoreBundledAgentEntrypoint(
   entryDir: string,
   env: Record<string, string | undefined>,
-): Promise<BundledAgentWiring | null> {
-  if (env.ZCODE_AGENT_SERVER_COMMAND?.trim()) {
-    return null;
-  }
-  const bundlePath = join(entryDir, "zcode.cjs");
+): Promise<string | undefined> {
+  if (env.ZCODE_AGENT_SERVER_COMMAND?.trim()) return undefined;
   try {
-    await access(bundlePath);
+    const [directory, entrypoint] = await Promise.all([
+      realpath(entryDir),
+      realpath(join(entryDir, "zcode.cjs")),
+    ]);
+    // 不认领指向发行目录外的同名 symlink 为内置来源。
+    if (dirname(entrypoint) !== directory || !(await stat(entrypoint)).isFile()) return undefined;
+    return entrypoint;
   } catch {
-    return null;
+    // 开发态没有同目录 bundle，保留 monorepo resolver；任何未知状态不放行 web。
+    return undefined;
   }
-  return {
-    ZCODE_AGENT_SERVER_COMMAND: process.execPath,
-    ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify([bundlePath, "app-server", "--stdio"]),
-  };
 }

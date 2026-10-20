@@ -350,7 +350,7 @@ describe("ElicitationDialog", () => {
     expect(html).toContain("overflow-y-auto");
     expect(html).toContain("overscroll-contain");
     expect(html).toContain("max-md:line-clamp-4");
-    expect(html).toContain('aria-label="展开问题"');
+    expect(html).toContain('aria-label="展开全文"');
     expect(html).toContain("flex shrink-0 items-center justify-between");
   });
 
@@ -367,7 +367,7 @@ describe("ElicitationDialog", () => {
       ),
     );
 
-    expect(html).toMatch(/aria-label="(?:折叠问题弹窗|收起问题)"/);
+    expect(html).toContain('aria-label="收起"');
     expect(html).toContain('aria-expanded="true"');
     expect(html).not.toContain("onClick={() =&gt; setIsDialogExpanded");
     expect(html).toContain('data-elicitation-dialog-body="true"');

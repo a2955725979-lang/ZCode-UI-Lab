@@ -37,6 +37,7 @@ export interface SessionTranscriptMessage {
 }
 
 export async function loadSessionTranscriptFromStore(input: {
+  preserveTextParts?: boolean;
   sessionId: SessionId;
   sessionStore?: SessionStorePort;
 }): Promise<SessionTranscriptMessage[]> {
@@ -47,11 +48,12 @@ export async function loadSessionTranscriptFromStore(input: {
   const messages = await input.sessionStore.messages({
     sessionID: input.sessionId,
   });
-  return projectSessionTranscript(messages);
+  return projectSessionTranscript(messages, { preserveTextParts: input.preserveTextParts });
 }
 
 export function projectSessionTranscript(
   messages: readonly MessageWithParts[],
+  options: { preserveTextParts?: boolean } = {},
 ): SessionTranscriptMessage[] {
   const transcript: SessionTranscriptMessage[] = [];
 
@@ -91,9 +93,11 @@ export function projectSessionTranscript(
     if (text.trim().length === 0 && visibleParts.length === 0) {
       continue;
     }
+    // 原来的整条消息省略判据先执行；保真 parts 不能让纯空白消息重新出现。
+    const replayParts = options.preserveTextParts ? transcriptParts : visibleParts;
     transcript.push({
       content: text,
-      ...(visibleParts.length > 0 ? { parts: visibleParts } : {}),
+      ...(replayParts.length > 0 ? { parts: replayParts } : {}),
       role: "agent",
     });
   }

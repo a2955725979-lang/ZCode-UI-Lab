@@ -89,7 +89,8 @@ function restoreTranscriptPart(
   workspaceDirectory: string | undefined,
 ): TranscriptPart | undefined {
   if (part.type === "text") {
-    return part.text.trim().length > 0 ? { text: part.text, type: "text" } : undefined;
+    // 空白也可能是跨 part 指令/围栏的真实边界，必须留到正文投影解析后再决定是否显示。
+    return { text: part.text, type: "text" };
   }
 
   if (part.type === "thought") {

@@ -33,7 +33,22 @@ vi.mock("@/prompt-editor/ChatPromptEditor.js", () => ({
       setEditorStateJson: vi.fn(),
       setText: vi.fn(),
     };
-    return createElement("textarea", { ref: editor, "data-testid": "retained-editor" });
+    return createElement(
+      "div",
+      null,
+      props.topContent as ReactNode,
+      createElement("textarea", {
+        ref: editor,
+        "data-testid": "retained-editor",
+        onChange: (event: { target: { value: string } }) =>
+          (props.onChange as (value: string) => void)(event.target.value),
+        onKeyDown: (event: { key: string }) => {
+          if (event.key === "Enter")
+            (props.onSubmit as (value: string) => void)(editor.current?.value ?? "");
+        },
+      }),
+      props.leadingActions as ReactNode,
+    );
   },
 }));
 vi.mock("@/v4/composer/V4ComposerToolbar.js", () => ({
@@ -71,6 +86,9 @@ type FixtureProps = {
   sessionId?: string;
   workspaceIdentity?: string;
   showCard?: boolean;
+  workDraft?: boolean;
+  briefEnabled?: boolean;
+  onSendText?: (text: string, options: unknown) => Promise<unknown>;
 };
 let serial = 0;
 const frames = new Map<number, FrameRequestCallback>();
@@ -85,6 +103,9 @@ function Fixture({
   sessionId = "focus-session",
   workspaceIdentity = "focus-workspace",
   showCard = true,
+  workDraft = false,
+  briefEnabled = true,
+  onSendText = vi.fn(),
 }: FixtureProps) {
   const interactionFocusBoundaryRef = useRef<HTMLDivElement | null>(null);
   const snapshot = {
@@ -138,11 +159,19 @@ function Fixture({
       interactionFocusBoundaryRef,
       autoFocusEnabled: active,
       disabled,
-      composerDraft: draft,
+      composerDraft: workDraft
+        ? {
+            ...draft,
+            taskStart: { outcome: "可复核", deliverable: "报告", constraints: "保留原件" },
+          }
+        : draft,
+      draftMode: workDraft,
+      workMode: workDraft,
+      workTaskBriefEnabled: briefEnabled,
       updateComposerContent: updateContent,
       replaceComposerDraft: noop,
       attachmentPut: vi.fn(),
-      onSendText: vi.fn(),
+      onSendText,
       onStop: noop,
       onSelectModel: noop,
       onSelectThought: noop,
@@ -341,5 +370,51 @@ describe("retained composer focus after inline interaction", () => {
     await flushFrames();
     expect(document.activeElement).toBe(editor(view.container));
     expect(inputFocus).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Work brief submission through the retained composer", () => {
+  it.each([false, true])(
+    "brief setting=%s controls the actual outgoing prompt",
+    async (briefEnabled) => {
+      const onSendText = vi.fn(async () => ({ status: "accepted" }));
+      const view = render(createElement(Fixture, { workDraft: true, briefEnabled, onSendText }));
+      await flushFrames();
+      const toggle = view.container.querySelector<HTMLButtonElement>(
+        '[data-testid="work-task-brief-toggle"]',
+      );
+      expect(Boolean(toggle)).toBe(briefEnabled);
+      if (toggle) {
+        expect(toggle.getAttribute("aria-label")).toBe("任务简报（已填写）");
+        expect(toggle.getAttribute("aria-expanded")).toBe("false");
+        expect(toggle.querySelector('[data-testid="work-task-brief-filled"]')).not.toBeNull();
+      }
+      fireEvent.change(editor(view.container), { target: { value: "整理资料" } });
+      fireEvent.keyDown(editor(view.container), { key: "Enter" });
+      await waitFor(() => expect(onSendText).toHaveBeenCalledTimes(1));
+      expect(onSendText.mock.calls[0]?.[0]).toBe(
+        briefEnabled
+          ? "整理资料\n\n预期结果：可复核\n交付形式：报告\n约束与边界：保留原件"
+          : "整理资料",
+      );
+    },
+  );
+  it("disabling an expanded brief hides it without writing or clearing stored fields", async () => {
+    const view = render(createElement(Fixture, { workDraft: true }));
+    await flushFrames();
+    fireEvent.click(view.container.querySelector('[data-testid="work-task-brief-toggle"]')!);
+    expect(view.container.querySelectorAll('[data-testid="work-task-brief"] input')).toHaveLength(
+      3,
+    );
+    expect(view.container.querySelector('[data-testid="work-task-brief"] textarea')).toBeNull();
+    const writesBefore = updateContent.mock.calls.length;
+    view.rerender(createElement(Fixture, { workDraft: true, briefEnabled: false }));
+    expect(view.container.querySelector('[data-testid="work-task-brief"]')).toBeNull();
+    expect(updateContent.mock.calls.length).toBe(writesBefore);
+    view.rerender(createElement(Fixture, { workDraft: true, briefEnabled: true }));
+    expect(
+      view.container.querySelector<HTMLInputElement>('[data-testid="work-task-brief-outcome"]')
+        ?.value,
+    ).toBe("可复核");
   });
 });

@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button.js";
 import { Kbd } from "@/components/ui/kbd.js";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
+import { useIsMobileTextInputViewport } from "@/lib/mobileTextInput.js";
 import type { FollowupSuggestion } from "@/v4/followupSuggestions.js";
 
 export function FollowupPreview({
@@ -16,6 +17,7 @@ export function FollowupPreview({
   onAccept: (suggestion: FollowupSuggestion, keyboard?: boolean) => void;
 }) {
   const { intl } = useZCodeIntl();
+  const isMobileTextInputViewport = useIsMobileTextInputViewport();
   const items = suggestions.slice(0, 3);
   if (!canAccept || items.length === 0) return null;
   return (
@@ -38,8 +40,10 @@ export function FollowupPreview({
               onClick={(event) => onAccept(suggestion, event.detail === 0)}
             >
               <span className="truncate">{suggestion.label}</span>
-              {index === 0 ? (
-                <Kbd>{intl.formatMessage({ id: "chat.followupSuggestions.tabHint" })}</Kbd>
+              {index === 0 && !isMobileTextInputViewport ? (
+                <Kbd className="[@media(hover:none)]:hidden">
+                  {intl.formatMessage({ id: "chat.followupSuggestions.tabHint" })}
+                </Kbd>
               ) : null}
             </Button>
           </TooltipTrigger>

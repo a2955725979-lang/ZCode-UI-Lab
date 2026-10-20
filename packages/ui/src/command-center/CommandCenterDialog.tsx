@@ -24,7 +24,6 @@ import {
   CommandShortcut,
 } from "@/components/ui/command.js";
 import { cn } from "@/components/lib/utils.js";
-import { Button } from "@/components/ui/button.js";
 import { toast } from "@/components/ui/toast.js";
 import { SessionHistoryModeLabel } from "@/SessionHistoryModeLabel.js";
 import { useGlobalTaskList } from "@/hooks/useGlobalTaskList.js";
@@ -253,9 +252,8 @@ export function CommandCenterScopeButton({
   children: ReactNode;
 }) {
   return (
-    <Button
+    <button
       type="button"
-      variant="ghost"
       role="tab"
       aria-selected={active}
       onClick={onClick}
@@ -271,7 +269,7 @@ export function CommandCenterScopeButton({
     >
       {children}
       <span>{label}</span>
-    </Button>
+    </button>
   );
 }
 
@@ -351,15 +349,14 @@ export function CommandCenterSearchHistory({
     <>
       <div className="flex items-center gap-2 px-3 pt-2 text-ui-sm font-medium text-foreground-subtle">
         <span>{historyLabel}</span>
-        <Button
+        <button
           type="button"
-          variant="ghost"
           aria-label={clearLabel}
           className="ml-auto inline-grid size-6 place-items-center rounded-md text-foreground-subtlest hover:bg-surface-hover hover:text-foreground"
           onClick={onClear}
         >
           <Trash2Icon className="size-3.5" />
-        </Button>
+        </button>
       </div>
       <div
         className={cn(
@@ -370,26 +367,24 @@ export function CommandCenterSearchHistory({
         {entries.map((entry) => {
           const prefix = scopeToPrefix(entry.scope);
           return (
-            <Button
+            <button
               key={`${entry.scope}:${entry.query}:${entry.updatedAt}`}
               type="button"
-              variant="ghost"
               // text-ui-base 随 --ui-font-size（12–20px）缩放，不能用固定 h-5
               // 否则 20px 字号下内容区（20px - 2px 边框 = 18px）装不下字体行盒，
               // 配合外层 overflow-hidden 会裁切文字。改用 min-h-5 + py-0.5 + leading-none
               // 让高度随字号增长，保证 12–20px 全范围可读。
-              className="inline-flex h-auto min-h-5 max-w-44 shrink-0 items-center gap-1 rounded-full border border-border px-2 py-0.5 text-ui-base leading-none text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
+              className="inline-flex min-h-5 max-w-44 shrink-0 items-center gap-1 rounded-full border border-border px-2 py-0.5 text-ui-base leading-none text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
               onClick={() => onPickEntry(entry)}
             >
               {prefix ? <span className="font-mono text-ui-xs text-brand">{prefix}</span> : null}
               <span className="min-w-0 truncate">{entry.query}</span>
-            </Button>
+            </button>
           );
         })}
         {canExpand ? (
-          <Button
+          <button
             type="button"
-            variant="ghost"
             aria-label={expanded ? collapseLabel : expandLabel}
             className="absolute top-1 right-3 inline-grid size-6 place-items-center rounded-md text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
             onClick={onToggleExpanded}
@@ -397,7 +392,7 @@ export function CommandCenterSearchHistory({
             <ChevronDownIcon
               className={cn("size-3.5 transition-transform", expanded ? "rotate-180" : "")}
             />
-          </Button>
+          </button>
         ) : null}
       </div>
     </>
@@ -740,15 +735,14 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
     }
 
     return (
-      <Button
+      <button
         type="button"
-        variant="ghost"
-        className="mt-0.5 h-auto justify-start flex min-h-7 w-full items-center gap-1.5 rounded-xl px-2.5 pl-8 text-left text-ui-base text-foreground-subtle hover:bg-menu-hover hover:text-foreground"
+        className="mt-0.5 flex min-h-7 w-full items-center gap-1.5 rounded-xl px-2.5 pl-8 text-left text-ui-base text-foreground-subtle hover:bg-menu-hover hover:text-foreground"
         onClick={() => setExpandedSections((current) => new Set(current).add(sectionId))}
       >
         {intl.formatMessage({ id: "commandCenter.moreResults" })}
         <ChevronDownIcon className="size-3.5" />
-      </Button>
+      </button>
     );
   };
 

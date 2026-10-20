@@ -114,7 +114,7 @@ export function createSubagentObservation(deps: ObservationDeps) {
       const messages = persisted.flatMap((message) =>
         replayMessageIds.has(message.info.id)
           ? [{ id: message.info.id, content: "", role: "agent" as const }]
-          : projectSessionTranscript([message]).map((projected) => ({
+          : projectSessionTranscript([message], { preserveTextParts: true }).map((projected) => ({
               ...projected,
               id: message.info.id,
             })),

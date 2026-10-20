@@ -1,8 +1,8 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createReleaseAgentWiring, resolveBundledAgentWiring } from "../src/runtime/agentWiring.js";
+import { resolveCoreBundledAgentEntrypoint } from "../src/runtime/agentWiring.js";
 
 const temporaryDirs: string[] = [];
 
@@ -13,57 +13,56 @@ async function makeTempDir(): Promise<string> {
 }
 
 afterEach(async () => {
-  await Promise.all(temporaryDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
+  await Promise.all(
+    temporaryDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })),
+  );
 });
 
-describe("resolveBundledAgentWiring", () => {
-  it("returns wiring for a bundled zcode.cjs next to the entry", async () => {
+describe("resolveCoreBundledAgentEntrypoint", () => {
+  it("returns the Core sibling bundle as an internal fact without mutating external env", async () => {
     const entryDir = await makeTempDir();
     const bundlePath = join(entryDir, "zcode.cjs");
     await writeFile(bundlePath, "// bundle\n", "utf8");
 
-    const wiring = await resolveBundledAgentWiring(entryDir, {});
-    expect(wiring).not.toBeNull();
-    expect(wiring?.ZCODE_AGENT_SERVER_COMMAND).toBe(process.execPath);
-    expect(JSON.parse(wiring?.ZCODE_AGENT_SERVER_ARGS_JSON ?? "[]")).toEqual([
-      bundlePath,
-      "app-server",
-      "--stdio",
-    ]);
+    const env = {};
+    expect(await resolveCoreBundledAgentEntrypoint(entryDir, env)).toBe(await realpath(bundlePath));
+    expect(env).toEqual({});
   });
 
   it("keeps an explicit ZCODE_AGENT_SERVER_COMMAND untouched", async () => {
     const entryDir = await makeTempDir();
     await writeFile(join(entryDir, "zcode.cjs"), "// bundle\n", "utf8");
 
-    const wiring = await resolveBundledAgentWiring(entryDir, {
+    const wiring = await resolveCoreBundledAgentEntrypoint(entryDir, {
       ZCODE_AGENT_SERVER_COMMAND: "/custom/agent",
     });
-    expect(wiring).toBeNull();
+    expect(wiring).toBeUndefined();
   });
 
   it("returns null when no bundled zcode.cjs exists (dev workspace)", async () => {
     const entryDir = await makeTempDir();
-    expect(await resolveBundledAgentWiring(entryDir, {})).toBeNull();
+    expect(await resolveCoreBundledAgentEntrypoint(entryDir, {})).toBeUndefined();
   });
 
-  it("recomputes automatic wiring from each candidate release runtime", () => {
-    const oldRuntime = "/releases/old/runtime";
-    const newRuntime = "/releases/new/runtime";
-
-    expect(createReleaseAgentWiring(oldRuntime, join(oldRuntime, "node"), {})).toEqual({
-      ZCODE_AGENT_SERVER_COMMAND: join(oldRuntime, "node"),
-      ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify([join(oldRuntime, "zcode.cjs"), "app-server", "--stdio"]),
-    });
-    expect(createReleaseAgentWiring(newRuntime, join(newRuntime, "node"), {})).toEqual({
-      ZCODE_AGENT_SERVER_COMMAND: join(newRuntime, "node"),
-      ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify([join(newRuntime, "zcode.cjs"), "app-server", "--stdio"]),
-    });
+  it("resolves each candidate Core's own runtime rather than reusing the supervisor bundle", async () => {
+    const oldRuntime = await makeTempDir();
+    const newRuntime = await makeTempDir();
+    for (const root of [oldRuntime, newRuntime])
+      await writeFile(join(root, "zcode.cjs"), "// bundle");
+    expect(await resolveCoreBundledAgentEntrypoint(oldRuntime, {})).toBe(
+      await realpath(join(oldRuntime, "zcode.cjs")),
+    );
+    expect(await resolveCoreBundledAgentEntrypoint(newRuntime, {})).toBe(
+      await realpath(join(newRuntime, "zcode.cjs")),
+    );
   });
 
-  it("does not replace an explicit agent command while computing release wiring", () => {
-    expect(createReleaseAgentWiring("/release/runtime", "/release/runtime/node", {
-      ZCODE_AGENT_SERVER_COMMAND: "/custom/agent",
-    })).toBeNull();
+  it("does not claim an outside symlink as its bundled CLI", async () => {
+    const coreDir = await makeTempDir();
+    const otherDir = await makeTempDir();
+    const outside = join(otherDir, "zcode.cjs");
+    await writeFile(outside, "// external");
+    await symlink(outside, join(coreDir, "zcode.cjs"));
+    expect(await resolveCoreBundledAgentEntrypoint(coreDir, {})).toBeUndefined();
   });
 });

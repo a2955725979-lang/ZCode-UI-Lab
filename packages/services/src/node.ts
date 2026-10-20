@@ -123,6 +123,7 @@ export type {
   ZCodeAgentProcessManagerOptions,
 } from "./zcode-agent/zcodeAgentProcessManager.js";
 export { ZCodeProtocolClient } from "./zcode-agent/zcodeProtocolClient.js";
+export { createStandaloneWebZCodeAgentCommandResolver } from "./zcode-agent/zcodeWebAgentCommandResolver.js";
 export type { ZCodeProtocolTransport } from "./zcode-agent/zcodeProtocolTransport.js";
 export { ZCodeStdioTransport } from "./zcode-agent/zcodeStdioTransport.js";
 export {

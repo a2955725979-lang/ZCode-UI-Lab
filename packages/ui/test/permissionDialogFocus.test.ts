@@ -13,6 +13,7 @@ import {
   consumeTaskInteractionOpenRequest,
 } from "@/v4/taskAttentionNavigation.js";
 import { V4InteractionDialogs } from "@/v4/V4InteractionDialogs.js";
+import { shouldIgnoreEscapeForStopGeneration } from "@/v4/composer/escapeStop.js";
 
 vi.mock("@/v4/V4ConversationContext.js", () => ({
   useV4Conversation: () => ({ sendCommand: vi.fn() }),
@@ -275,6 +276,38 @@ describe("PermissionDialog focus", () => {
       undefined,
     );
   });
+
+  it.each(["option0", "option1", "option2", "feedback"])(
+    "keeps permission %s Escape from the window stop shortcut through the actual DOM event path",
+    (target) => {
+      const { container, input, options, onRespond } = renderPermission();
+      const stop = vi.fn();
+      const events: Array<{ defaultPrevented: boolean; bubbles: boolean; role: string | null }> =
+        [];
+      const listener = (event: KeyboardEvent) => {
+        events.push({
+          defaultPrevented: event.defaultPrevented,
+          bubbles: event.bubbles,
+          role: (event.target as HTMLElement).getAttribute("role"),
+        });
+        if (event.key === "Escape" && !shouldIgnoreEscapeForStopGeneration(event, container))
+          stop();
+      };
+      window.addEventListener("keydown", listener);
+      try {
+        fireEvent.keyDown(
+          target.startsWith("option") ? options[Number(target.slice(-1))]! : input!,
+          {
+            key: "Escape",
+          },
+        );
+        expect(stop.mock.calls.length, JSON.stringify(events)).toBe(0);
+        expect(onRespond).not.toHaveBeenCalled();
+      } finally {
+        window.removeEventListener("keydown", listener);
+      }
+    },
+  );
 
   it("preserves three-option navigation and plain Deny without feedback capability", () => {
     const { input, options, flush, confirm, onRespond } = renderPermission(false);

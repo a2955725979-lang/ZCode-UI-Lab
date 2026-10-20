@@ -156,7 +156,8 @@ html[data-document-hidden] *::after {
     [role="checkbox"],
     [role="menuitemcheckbox"],
     [role="menuitemradio"],
-    [role="radio"]
+    [role="radio"],
+    [data-focus-style="row"]
   ):focus-visible {
   outline: 2px solid var(--color-input-border-focused);
   outline-offset: 1px;
@@ -297,7 +298,7 @@ html[data-document-hidden] *::after {
   --color-input-focused: var(--color-neutral-50);
   --color-input-border: var(--color-border);
   --color-input-border-hover: var(--color-border-hover);
-  --color-input-border-focused: var(--color-brand);
+  --color-input-border-focused: var(--color-foreground);
   --color-terminal-bg: var(--color-neutral-50);
   --color-terminal-fg: var(--color-neutral-950);
   --color-terminal-cursor: var(--color-neutral-950);

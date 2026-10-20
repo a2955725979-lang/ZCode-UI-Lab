@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  parseFollowupSuggestions as sharedParse,
+  stripFollowupSuggestionDirectives as sharedStrip,
+} from "@zcode/shared";
 import type { ConversationSnapshot } from "@zcode/shared/zcode-protocol-v4";
 import {
   getLatestFollowupSuggestions,
@@ -23,6 +27,10 @@ function snapshot(state = "completedSuccess", text = directive): ConversationSna
 }
 
 describe("next-prompt suffix metadata", () => {
+  it("旧 UI API 直接复用同一共享纯函数", () => {
+    expect(parseFollowupSuggestions).toBe(sharedParse);
+    expect(stripFollowupSuggestionDirectives).toBe(sharedStrip);
+  });
   it.each([0, 1, 3, 4])("只提取末尾连续指令，最多三条：%i", (count) => {
     const content = ["已完成", ...Array<string>(count).fill(directive)].join("\n\n");
     const expected = { text: "已完成", suggestions: Array(Math.min(count, 3)).fill(suggestion) };

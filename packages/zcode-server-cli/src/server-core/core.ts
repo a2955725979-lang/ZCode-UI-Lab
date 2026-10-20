@@ -1,5 +1,8 @@
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   createLocalServices,
+  createStandaloneWebZCodeAgentCommandResolver,
   disposeServiceResourcesAndWait,
   materializeZCodeBuiltinProviderConfig,
   getAppConfigDir,
@@ -12,6 +15,7 @@ import { createCoreHttpServer } from "./http.js";
 import { installParentDisconnectHandler } from "./parentDisconnect.js";
 import { resolveCoreServerId } from "./serverIdentity.js";
 import { createTaskActivityTracker } from "./taskActivityTracker.js";
+import { resolveCoreBundledAgentEntrypoint } from "../runtime/agentWiring.js";
 
 declare const __ZCODE_BUILTIN_PROVIDER_CONFIG_JSON__: string | undefined;
 
@@ -41,6 +45,12 @@ export async function runServerCore(generation: number): Promise<void> {
   }
   const services = createLocalServices({
     standaloneWebHost: true,
+    zcodeAgentCommandResolver: createStandaloneWebZCodeAgentCommandResolver({
+      bundledAgentEntrypoint: await resolveCoreBundledAgentEntrypoint(
+        dirname(fileURLToPath(import.meta.url)),
+        process.env,
+      ),
+    }),
     zcodeBuiltinProviderConfigFilePath,
     serviceAuthorityMode: "standalone-server",
     topicResourceRelayChannel: (request) => topicResourcePeers.getChannel(request),

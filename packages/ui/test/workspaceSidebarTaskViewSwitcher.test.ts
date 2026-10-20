@@ -10,6 +10,17 @@ function readWorkspaceSidebarSource(): string {
 }
 
 describe("WorkspaceSidebar task view switcher", () => {
+  it("keeps Work history filtering inside the existing task-view menu and Chat heading separate", () => {
+    const source = readWorkspaceSidebarSource();
+    const toolbar = source.slice(source.indexOf("const workspaceTaskToolbar"), source.indexOf("const showFileTree"));
+    expect(toolbar).toContain('aria-label={intl.formatMessage({ id: "chatWorkspace.historyFilter" })}');
+    expect(toolbar).toContain('data-history-filter={historyFilter}');
+    expect(toolbar).toContain('setHistoryFilter(value)');
+    expect(toolbar).not.toContain('id: "chatWorkspace.history"');
+    const heading = source.indexOf('id: "chatWorkspace.history"');
+    expect(source.slice(heading - 300, heading)).toContain('{isChatMode ? (');
+  });
+
   it("renders grouped before project while keeping project as the fallback default", () => {
     const source = readWorkspaceSidebarSource();
     const groupedTriggerIndex = source.indexOf('value="grouped"');

@@ -1,13 +1,24 @@
 import { afterEach, expect, it, vi } from "vitest";
 
-const { createLocalServices, createHttpServer, createCoreHttpServer } = vi.hoisted(() => ({
+const {
+  createLocalServices,
+  createHttpServer,
+  createCoreHttpServer,
+  webResolver,
+  createWebResolver,
+} = vi.hoisted(() => ({
   createLocalServices: vi.fn(() => ({ getOptional: vi.fn() })),
   createHttpServer: vi.fn(),
   createCoreHttpServer: vi.fn(async () => ({ host: "127.0.0.1", port: 3030, close: vi.fn() })),
+  webResolver: vi.fn(),
+  createWebResolver: vi.fn(),
 }));
+
+createWebResolver.mockReturnValue(webResolver);
 
 vi.mock("@zcode/services/node", () => ({
   createLocalServices,
+  createStandaloneWebZCodeAgentCommandResolver: createWebResolver,
   createTopicResourcePeers: () => ({ getChannel: vi.fn() }),
   getAppConfigDir: () => "/isolated-web-config",
   materializeZCodeBuiltinProviderConfig: async () => "/isolated-web-config/provider.json",
@@ -46,7 +57,7 @@ it("HTTP Web入口显式声明Web，不改变通用HTTP服务器或stdio默认�
   await import("../src/entry-http.js");
   await vi.waitFor(() => expect(createHttpServer).toHaveBeenCalledTimes(1));
   expect(createLocalServices).toHaveBeenCalledWith(
-    expect.objectContaining({ standaloneWebHost: true }),
+    expect.objectContaining({ standaloneWebHost: true, zcodeAgentCommandResolver: webResolver }),
   );
 });
 
@@ -62,6 +73,7 @@ it("独立Server Core显式声明Web；不依赖通用standalone-server authorit
     expect.objectContaining({
       standaloneWebHost: true,
       serviceAuthorityMode: "standalone-server",
+      zcodeAgentCommandResolver: webResolver,
     }),
   );
 });

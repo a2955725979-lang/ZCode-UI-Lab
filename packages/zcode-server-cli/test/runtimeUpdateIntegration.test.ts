@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -121,7 +121,7 @@ describe.skipIf(process.platform === "win32")("runtime update integration", () =
     }
   }, 20_000);
 
-  it("launches real old/new Core processes with release-scoped Agent wiring", async () => {
+  it("launches real old/new Core fixtures with self-located bundled Agent facts, without external env wiring", async () => {
     // POSIX Unix socket 有路径长度限制，macOS 的 tmpdir() 可能位于很长的 /var/folders 路径；
     // 保持短路径，Windows 则使用其可移植的系统临时目录。
     const root = await mkdtemp(
@@ -136,8 +136,19 @@ describe.skipIf(process.platform === "win32")("runtime update integration", () =
       const runtimeRoot = join(layout.releasesDir, version, "runtime");
       await mkdir(runtimeRoot, { recursive: true });
       await symlink(process.execPath, join(runtimeRoot, "node"));
-      await symlink(fixture, join(runtimeRoot, "server-core.js"));
-      await writeFile(join(runtimeRoot, "zcode.cjs"), "", "utf8");
+      await cp(fixture, join(runtimeRoot, "server-core.js"));
+      await writeFile(
+        join(runtimeRoot, "zcode.cjs"),
+        version === "old"
+          ? "if (process.argv.includes('--surface')) process.exit(1); console.log('1.0.0');\n"
+          : "if (!process.argv.includes('--version')) process.exit(7); console.log('2.0.0');\n",
+        "utf8",
+      );
+      await writeFile(
+        join(runtimeRoot, "package.json"),
+        JSON.stringify({ type: "module" }),
+        "utf8",
+      );
     }
     await releases.writePending({ version: "old", releaseDir: join(layout.releasesDir, "old") });
     await releases.applyPending();
@@ -160,6 +171,14 @@ describe.skipIf(process.platform === "win32")("runtime update integration", () =
         env: {
           ...process.env,
           ZCODE_TEST_WIRING_OUTPUT: wiringOutput,
+          ZCODE_TEST_AGENT_WIRING_MODULE: new URL("../src/runtime/agentWiring.ts", import.meta.url)
+            .href,
+          ZCODE_TEST_WEB_RESOLVER_MODULE: new URL(
+            "../../services/src/zcode-agent/zcodeWebAgentCommandResolver.ts",
+            import.meta.url,
+          ).href,
+          ZCODE_AGENT_SERVER_COMMAND: "",
+          ZCODE_AGENT_SERVER_ARGS_JSON: "",
         },
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -204,7 +223,10 @@ describe.skipIf(process.platform === "win32")("runtime update integration", () =
         (line) =>
           JSON.parse(line) as {
             agentArgs: string[];
-            agentCommand: string;
+            agentCommand: string | null;
+            bundledAgentEntrypoint: string;
+            resolvedAgentCommand: string;
+            resolvedAgentArgs: string[];
             dataBaseDir: string;
             runtimeRoot: string;
           },
@@ -213,8 +235,16 @@ describe.skipIf(process.platform === "win32")("runtime update integration", () =
     for (const [index, version] of ["old", "new"].entries()) {
       const runtimeRoot = join(layout.releasesDir, version, "runtime");
       expect(records[index]).toMatchObject({
-        agentArgs: [join(runtimeRoot, "zcode.cjs"), "app-server", "--stdio"],
-        agentCommand: join(runtimeRoot, "node"),
+        agentArgs: [],
+        agentCommand: "",
+        bundledAgentEntrypoint: await realpath(join(runtimeRoot, "zcode.cjs")),
+        resolvedAgentCommand: await realpath(process.execPath),
+        resolvedAgentArgs: [
+          await realpath(join(runtimeRoot, "zcode.cjs")),
+          "app-server",
+          "--stdio",
+          ...(version === "new" ? ["--surface", "web"] : []),
+        ],
         dataBaseDir: canonicalLayout.dataBaseDir,
         runtimeRoot,
       });

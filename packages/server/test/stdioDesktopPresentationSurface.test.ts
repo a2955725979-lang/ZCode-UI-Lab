@@ -1,14 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { IModelSelectionService, IZCodeAgentService } from "@zcode/services";
-import {
-  disposeServiceResourcesAndWait,
-  resolveDefaultZCodeAgentCommand,
-  setDataBaseDir,
-  type ZCodeAgentCommand,
-  type ZCodeAgentCommandResolverContext,
-} from "@zcode/services/node";
+import type { ZCodeAgentCommand, ZCodeAgentCommandResolverContext } from "@zcode/services/node";
 import {
   SERVICE_AUTHORITY_MODE_ENV,
   ZCODE_DESKTOP_CONTEXT_PROMPT_ENABLED_ENV,
@@ -17,9 +10,9 @@ import {
   ZCODE_REMOTE_RUNTIME_NETWORK_AUTHORITY_ENV_KEY,
 } from "@zcode/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createStdioServices, resolveRemoteAgentNetworkFromEnv } from "../src/stdioServices.js";
+import { resolveRemoteAgentNetworkFromEnv } from "../src/stdioServices.js";
 
-const originalHome = process.env.HOME;
+const originalApplicationHome = process.env.ZCODE_APPLICATION_HOME;
 const originalCommand = process.env.ZCODE_AGENT_SERVER_COMMAND;
 const originalArgsJson = process.env.ZCODE_AGENT_SERVER_ARGS_JSON;
 const originalDesktopContextPromptEnabled = process.env[ZCODE_DESKTOP_CONTEXT_PROMPT_ENABLED_ENV];
@@ -36,8 +29,7 @@ describe("stdio Desktop presentation surface", () => {
   const tempHomes: string[] = [];
 
   afterEach(async () => {
-    setDataBaseDir(null);
-    restoreEnv("HOME", originalHome);
+    restoreEnv("ZCODE_APPLICATION_HOME", originalApplicationHome);
     restoreEnv("ZCODE_AGENT_SERVER_COMMAND", originalCommand);
     restoreEnv("ZCODE_AGENT_SERVER_ARGS_JSON", originalArgsJson);
     restoreEnv(ZCODE_DESKTOP_CONTEXT_PROMPT_ENABLED_ENV, originalDesktopContextPromptEnabled);
@@ -69,8 +61,14 @@ describe("stdio Desktop presentation surface", () => {
   it("让 Desktop attached remote authority 贯穿 stdio 装配并生成 Desktop Agent 命令", async () => {
     const home = await mkdtemp(join(tmpdir(), "zcode-stdio-desktop-surface-"));
     tempHomes.push(home);
-    process.env.HOME = home;
-    setDataBaseDir(home);
+    // 使用正式隔离入口，避免外层 ZCODE_APPLICATION_HOME 覆盖 fixture 的配置根。
+    process.env.ZCODE_APPLICATION_HOME = home;
+    // paths 在模块求值时固定隔离根；必须先设置再装配，不能事后用旧 data-root setter 绕过。
+    vi.resetModules();
+    const { IModelSelectionService, IZCodeAgentService } = await import("@zcode/services");
+    const { disposeServiceResourcesAndWait, resolveDefaultZCodeAgentCommand } =
+      await import("@zcode/services/node");
+    const { createStdioServices } = await import("../src/stdioServices.js");
     // Bugfix: 开发机可能导出 ZCODE_DESKTOP_CONTEXT_PROMPT_ENABLED=0（如本机 ZCode 安装的 shell 集成），
     // 会把 desktop-attached-remote 推导出的 presentationSurface 灭成 undefined，
     // 让「surface 贯穿装配」断言变成环境敏感；显式置 1 恢复用例封闭性。
@@ -232,7 +230,6 @@ describe("stdio Desktop presentation surface", () => {
     } finally {
       // 等待服务异步落盘与回收结束，避免清理临时目录时后台重新创建文件。
       await disposeServiceResourcesAndWait(bootstrap.services);
-      setDataBaseDir(null);
     }
   });
 });

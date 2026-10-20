@@ -330,6 +330,97 @@ describe("V4 ordinary question presentation and response lifecycle", () => {
     expect(sendCommand.mock.calls[0]?.[0].type).toBe("resolveInteraction");
     expect(sendCommand.mock.calls[0]?.[0].payload.answer).toEqual({ freeText: "fixture-answer" });
   });
+  it.each(["rejected", "transport"])(
+    "locks repeated userInput Enter, preserves a sensitive answer after %s and permits retry",
+    async (failure) => {
+      let finish!: (value: unknown) => void;
+      let fail!: (error: Error) => void;
+      sendCommand.mockImplementationOnce(
+        () => new Promise((resolve, reject) => { finish = resolve; fail = reject; }),
+      );
+      const state = snapshot(`sensitive-flight-${serial}`);
+      state.pendingInteractions[0]!.payload = {
+        kind: "userInput", prompt: "输入验证码", freeText: true, sensitive: true, options: [],
+      };
+      const view = render(ui(state));
+      const input = view.container.querySelector<HTMLInputElement>('input[type="password"]')!;
+      fireEvent.change(input, { target: { value: "keep-local-answer" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(sendCommand).toHaveBeenCalledTimes(1);
+      expect(input.disabled).toBe(true);
+      expect(view.getByRole("button", { name: "提交中…" }).hasAttribute("disabled")).toBe(true);
+      await act(async () => {
+        if (failure === "transport") fail(new Error("fixture offline"));
+        else finish({ status: "rejected" });
+      });
+      await waitFor(() => expect(view.getByRole("alert").textContent).toContain("答案已保留"));
+      expect(input.type).toBe("password");
+      expect(input.value).toBe("keep-local-answer");
+      expect(input.disabled).toBe(false);
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(sendCommand).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(view.queryByRole("alert")).toBeNull());
+      expect(sendCommand.mock.calls[1]?.[0].payload.answer).toEqual({ freeText: "keep-local-answer" });
+    },
+  );
+  it("locks all unstructured option rows during one pending response and retries rejected choices", async () => {
+    let finish!: (value: unknown) => void;
+    sendCommand.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const state = snapshot(`options-flight-${serial}`);
+    state.pendingInteractions[0]!.payload = {
+      kind: "userInput", prompt: "请选择通道", freeText: false,
+      options: [{ optionId: "one", label: "通道一" }, { optionId: "two", label: "通道二" }],
+    };
+    const view = render(ui(state));
+    const rows = view.container.querySelectorAll<HTMLButtonElement>('[data-focus-style="row"]');
+    fireEvent.click(rows[0]!);
+    fireEvent.click(rows[1]!);
+    expect(sendCommand).toHaveBeenCalledTimes(1);
+    expect([...rows].every((row) => row.disabled)).toBe(true);
+    expect(view.getByRole("status").textContent).toBe("提交中…");
+    await act(async () => { finish({ status: "rejected" }); });
+    await waitFor(() => expect(view.getByRole("alert")).not.toBeNull());
+    fireEvent.click(rows[1]!);
+    await waitFor(() => expect(sendCommand).toHaveBeenCalledTimes(2));
+    expect(sendCommand.mock.calls[1]?.[0].payload.answer).toEqual({ optionId: "two" });
+  });
+  it.each(["accepted", "duplicate", "noop"])("treats a userInput %s ACK as successful", async (status) => {
+    sendCommand.mockImplementationOnce(async (envelope) => ({ commandId: envelope.commandId, status }));
+    const state = snapshot(`ack-${serial}`);
+    state.pendingInteractions[0]!.payload = {
+      kind: "userInput", prompt: "请输入", freeText: true, options: [],
+    };
+    const view = render(ui(state));
+    const input = view.container.querySelector<HTMLInputElement>("input")!;
+    fireEvent.change(input, { target: { value: "answer" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(input.disabled).toBe(false));
+    expect(view.queryByRole("alert")).toBeNull();
+  });
+  it("isolates userInput responses and drafts across sessions with the same interactionId", async () => {
+    let finish!: (value: unknown) => void;
+    sendCommand.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const first = snapshot(`same-id-${serial}`, "first-session");
+    first.pendingInteractions[0]!.payload = {
+      kind: "userInput", prompt: "请输入", freeText: true, options: [],
+    };
+    const second = { ...first, sessionId: "second-session" };
+    const view = render(ui(first));
+    const firstInput = view.container.querySelector<HTMLInputElement>("input")!;
+    fireEvent.change(firstInput, { target: { value: "first-only" } });
+    fireEvent.keyDown(firstInput, { key: "Enter" });
+    view.rerender(ui(second));
+    const secondInput = view.container.querySelector<HTMLInputElement>("input")!;
+    expect(secondInput.value).toBe("");
+    expect(secondInput.disabled).toBe(false);
+    await act(async () => { finish({ status: "rejected" }); });
+    expect(view.queryByRole("alert")).toBeNull();
+    fireEvent.change(secondInput, { target: { value: "second-only" } });
+    fireEvent.keyDown(secondInput, { key: "Enter" });
+    await waitFor(() => expect(sendCommand).toHaveBeenCalledTimes(2));
+    expect(sendCommand.mock.calls[1]?.[0].sessionId).toBe("second-session");
+  });
   it("does not turn plan approval into ordinary skip/defer", async () => {
     const state = snapshot(`plan-${serial}`);
     const pending = state.pendingInteractions[0]!;

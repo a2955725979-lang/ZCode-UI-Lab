@@ -609,6 +609,9 @@ function ConversationComposerImpl({
   currentScopeKeyRef.current = configPickerScopeKey;
   const composingRef = useRef(false);
   const [briefExpanded, setBriefExpanded] = useState(false);
+  const briefHasContent = Object.values(composerDraft?.taskStart ?? {}).some((value) =>
+    value.trim(),
+  );
   useEffect(() => {
     composingRef.current = false;
     setBriefExpanded(false);
@@ -1525,7 +1528,8 @@ function ConversationComposerImpl({
         // share URL 塞进发给模型的正文。模型侧内容由隐藏的 shared_context 消息经
         // inputIntent.sharedContextRefs 注入，与正文无关。
         const promptText = serializeComposerPromptContexts(
-          draftMode && workMode
+          // 设置关闭时保留草稿中的简报，但不能发送用户当前看不见的补充内容。
+          draftMode && workMode && workTaskBriefEnabled
             ? formatWorkTaskBriefPrompt(trimmed, submittedDraft.taskStart, {
                 outcome: intl.formatMessage({ id: "chat.workBrief.outcome.prefix" }),
                 deliverable: intl.formatMessage({ id: "chat.workBrief.deliverable.prefix" }),
@@ -1692,6 +1696,7 @@ function ConversationComposerImpl({
       disabled,
       draftMode,
       workMode,
+      workTaskBriefEnabled,
       intl,
       conversationSelectionReferences,
       conversationTelemetry,
@@ -2232,9 +2237,7 @@ function ConversationComposerImpl({
                     </span>
                   ) : null}
                   {attachment.uploadStatus === "failed" ? (
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
+                    <button
                       type="button"
                       data-testid={testId(TID_V4_ATTACHMENT_UPLOAD_RETRY, attachment.id)}
                       aria-label={intl.formatMessage({
@@ -2249,7 +2252,7 @@ function ConversationComposerImpl({
                       }}
                     >
                       <RotateCcwIcon className="size-3" />
-                    </Button>
+                    </button>
                   ) : null}
                   <Button
                     type="button"
@@ -2498,18 +2501,32 @@ function ConversationComposerImpl({
           currentSessionBusy={canStop}
         />
         {draftMode && workMode && workTaskBriefEnabled ? (
-          <ControlHintTooltip title={intl.formatMessage({ id: "chat.workBrief.title" })}>
+          <ControlHintTooltip
+            title={intl.formatMessage({
+              id: briefHasContent ? "chat.workBrief.filledTitle" : "chat.workBrief.title",
+            })}
+          >
             <Button
               type="button"
               variant="ghost"
               size="icon-sm"
-              aria-label={intl.formatMessage({ id: "chat.workBrief.title" })}
+              aria-label={intl.formatMessage({
+                id: briefHasContent ? "chat.workBrief.filledTitle" : "chat.workBrief.title",
+              })}
               aria-expanded={briefExpanded}
               data-testid="work-task-brief-toggle"
               disabled={disabled || pending}
+              className="relative"
               onClick={() => setBriefExpanded((value) => !value)}
             >
               <ListChecks className="size-4" />
+              {briefHasContent ? (
+                <span
+                  aria-hidden="true"
+                  data-testid="work-task-brief-filled"
+                  className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-brand"
+                />
+              ) : null}
             </Button>
           </ControlHintTooltip>
         ) : null}
@@ -2523,6 +2540,7 @@ function ConversationComposerImpl({
     ),
     [
       activeConfigPicker,
+      briefHasContent,
       briefExpanded,
       draftMode,
       workMode,
@@ -2704,7 +2722,7 @@ function ConversationComposerImpl({
           topContent={
             <>
               {topContentNode}
-              {draftMode && workMode && briefExpanded ? (
+              {draftMode && workMode && workTaskBriefEnabled && briefExpanded ? (
                 <WorkTaskBrief
                   fields={composerDraft?.taskStart ?? EMPTY_WORK_TASK_START}
                   disabled={disabled || pending}

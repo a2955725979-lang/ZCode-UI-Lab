@@ -439,19 +439,24 @@ function resolveElectronRuntimeZCodeAgentCommand(
   };
 }
 
-export function resolveDefaultZCodeAgentCommand(
+/** 内置来源仅由选择分支产生，不从外部命令的文件名或启动能力推断。 */
+export interface ZCodeAgentCommandCandidate {
+  command: ZCodeAgentCommand;
+  bundledEntrypoint?: string;
+}
+
+export function resolveZCodeAgentCommandCandidate(
   context: ZCodeAgentCommandResolverContext,
-): ZCodeAgentCommand | null {
+): ZCodeAgentCommandCandidate | null {
   const command = process.env.ZCODE_AGENT_SERVER_COMMAND?.trim();
   if (command) {
-    return applyPresentationSurfaceToCommand(
-      {
+    return {
+      command: {
         command,
         args: parseArgsJson(process.env.ZCODE_AGENT_SERVER_ARGS_JSON) ?? ["app-server", "--stdio"],
         cwd: process.env.ZCODE_AGENT_SERVER_CWD?.trim() || context.workspacePath,
       },
-      context.presentationSurface,
-    );
+    };
   }
 
   // 顺序：env 显式覆盖 → monorepo dev 源码/dist（dev 改源码立刻生效，不会被远端历史装的 native binary
@@ -459,17 +464,40 @@ export function resolveDefaultZCodeAgentCommand(
   const bundled =
     resolveBundledWorkspaceZCodeAgentCommand(context) ??
     resolveElectronRuntimeZCodeAgentCommand(context);
-  return applyPresentationSurfaceToCommand(
-    bundled
-      ? { ...bundled, supportsStorageStartup: true }
-      : resolveDeployedZCodeAgentBinaryCommand(context),
-    context.presentationSurface,
-  );
+  if (bundled) {
+    const entrypoint = bundled.args?.[0];
+    return {
+      command: { ...bundled, supportsStorageStartup: true },
+      // 字节码 loader 另有可变的 bytecode 文件；未完整识别 artifact 时保守回退。
+      ...(entrypoint && !entrypoint.endsWith("zcode.bytecode.cjs")
+        ? { bundledEntrypoint: entrypoint }
+        : {}),
+    };
+  }
+  const deployed = resolveDeployedZCodeAgentBinaryCommand(context);
+  return deployed ? { command: deployed } : null;
+}
+
+export function resolveDefaultZCodeAgentCommand(
+  context: ZCodeAgentCommandResolverContext,
+): ZCodeAgentCommand | null {
+  const candidate = resolveZCodeAgentCommandCandidate(context);
+  // Web 的异步确认由 standalone 入口注入；同步默认路径绝不追加或改写外部参数。
+  if (context.presentationSurface === "web") return candidate?.command ?? null;
+  return applyPresentationSurfaceToCommand(candidate?.command ?? null, context.presentationSurface);
+}
+
+export function applyZCodeAgentWebSurface(
+  command: ZCodeAgentCommand,
+  supported: boolean,
+): ZCodeAgentCommand {
+  return applyPresentationSurfaceToCommand(command, "web", supported)!;
 }
 
 function applyPresentationSurfaceToCommand(
   command: ZCodeAgentCommand | null,
   presentationSurface: ZCodeAgentCommandResolverContext["presentationSurface"],
+  webSupported = false,
 ): ZCodeAgentCommand | null {
   if (!command || !presentationSurface) {
     return command;
@@ -497,7 +525,11 @@ function applyPresentationSurfaceToCommand(
 
   return {
     ...command,
-    args: [...args, "--surface", presentationSurface],
+    // 同步默认 resolver 不运行能力确认；Web 只由独立入口的异步 resolver 放行。
+    args:
+      presentationSurface === "web" && !webSupported
+        ? args
+        : [...args, "--surface", presentationSurface],
   };
 }
 

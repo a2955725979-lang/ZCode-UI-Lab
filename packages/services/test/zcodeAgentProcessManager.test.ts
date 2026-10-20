@@ -22,6 +22,7 @@ import {
 import {
   buildE2EAgentCoverageEnv,
   resolveDefaultZCodeAgentCommand,
+  resolveZCodeAgentCommandCandidate,
   wrapZCodeAgentCommandWithStdioTapDevProxy,
   ZCodeAgentProcessManager,
   type ZCodeAgentCommand,
@@ -193,6 +194,14 @@ describe("resolveDefaultZCodeAgentCommand", () => {
     });
     expect(realpathSync(command!.args![0]!)).toBe(realpathSync(distEntrypoint));
     expect(realpathSync(command!.storagePreparationEntry!)).toBe(realpathSync(distEntrypoint));
+    expect(
+      realpathSync(
+        resolveZCodeAgentCommandCandidate({
+          workspacePath: "/repo/workspace",
+          workspaceKey: "/repo/workspace",
+        })!.bundledEntrypoint!,
+      ),
+    ).toBe(realpathSync(distEntrypoint));
   });
 
   it.each([
@@ -286,8 +295,8 @@ describe("resolveDefaultZCodeAgentCommand", () => {
   });
 
   it.each(desktopSurfaceArgsCases)(
-    "Web surface 归一化 $name 且不伪装Desktop",
-    ({ input, expected }) => {
+    "Web 同步 resolver 保留外部覆盖的 $name，不探测也不追加",
+    ({ input }) => {
       process.env.ZCODE_AGENT_SERVER_COMMAND = "zcode-agent";
       process.env.ZCODE_AGENT_SERVER_ARGS_JSON = JSON.stringify(input);
       const command = resolveDefaultZCodeAgentCommand({
@@ -295,7 +304,13 @@ describe("resolveDefaultZCodeAgentCommand", () => {
         workspaceKey: "/workspace",
         presentationSurface: "web",
       });
-      expect(command?.args).toEqual(expected.map((arg) => (arg === "desktop" ? "web" : arg)));
+      expect(command?.args).toEqual(input);
+      expect(
+        resolveZCodeAgentCommandCandidate({
+          workspacePath: "/workspace",
+          workspaceKey: "/workspace",
+        }),
+      ).not.toHaveProperty("bundledEntrypoint");
     },
   );
 
@@ -347,6 +362,19 @@ describe("resolveDefaultZCodeAgentCommand", () => {
       args: ZCODE_AGENT_RUNTIME.spawnArgs,
       cwd: "/repo/workspace",
     });
+    expect(
+      resolveZCodeAgentCommandCandidate({
+        workspacePath: "/repo/workspace",
+        workspaceKey: "/repo/workspace",
+      }),
+    ).not.toHaveProperty("bundledEntrypoint");
+    expect(
+      resolveDefaultZCodeAgentCommand({
+        workspacePath: "/repo/workspace",
+        workspaceKey: "/repo/workspace",
+        presentationSurface: "web",
+      }),
+    ).toEqual(command);
   });
 
   it("并发启动同一 workspace 时只创建一个 client", async () => {

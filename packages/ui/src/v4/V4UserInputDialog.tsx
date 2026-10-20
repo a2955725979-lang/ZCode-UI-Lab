@@ -12,14 +12,51 @@ import { isImeComposingKeyEvent } from "@/lib/imeComposition.js";
 import type { V4UserInputViewModel } from "@/v4/pendingInteractionAdapter.js";
 import { runUserAction } from "@/lib/userActionTelemetry.js";
 
+type UserInputAnswer = { optionId?: string; freeText?: string };
+
+/** Hooks stay in the existing V4InteractionDialogs owner; no response queue is added. */
+export function useUserInputResponse(
+  scopeKey: string,
+  resolveResponse: (answer: UserInputAnswer) => Promise<boolean>,
+) {
+  const currentScope = useRef(scopeKey);
+  currentScope.current = scopeKey;
+  const flights = useRef(new Set<string>());
+  const [response, setResponse] = useState<{ scopeKey: string; failed: boolean } | null>(null);
+  const onSubmit = (answer: UserInputAnswer) => {
+    if (flights.current.has(scopeKey)) return;
+    flights.current.add(scopeKey);
+    setResponse({ scopeKey, failed: false });
+    const settle = (accepted: boolean) => {
+      flights.current.delete(scopeKey);
+      if (currentScope.current === scopeKey) setResponse({ scopeKey, failed: !accepted });
+    };
+    void resolveResponse(answer).then(settle, () => settle(false));
+  };
+  return {
+    scopeKey,
+    responding: flights.current.has(scopeKey),
+    failed: response?.scopeKey === scopeKey && response.failed,
+    onSubmit,
+  };
+}
+
 export interface V4UserInputDialogProps {
   model: V4UserInputViewModel;
   autoFocus?: boolean;
-  onSubmit: (answer: { optionId?: string; freeText?: string }) => void;
+  responding?: boolean;
+  responseFailed?: boolean;
+  onSubmit: (answer: UserInputAnswer) => void;
 }
 
 /** 未结构化的 userInput 复用 dock 内联卡片，敏感输入不改变协议与密码类型。 */
-export function V4UserInputDialog({ model, autoFocus = true, onSubmit }: V4UserInputDialogProps) {
+export function V4UserInputDialog({
+  model,
+  autoFocus = true,
+  responding = false,
+  responseFailed = false,
+  onSubmit,
+}: V4UserInputDialogProps) {
   const { intl } = useZCodeIntl();
   const [freeText, setFreeText] = useState("");
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -34,6 +71,7 @@ export function V4UserInputDialog({ model, autoFocus = true, onSubmit }: V4UserI
 
   const handleOption = useCallback(
     (optionId: string) => {
+      if (responding) return;
       runUserAction({
         input: {
           featureId: "conversation.blocking.user_input",
@@ -45,20 +83,22 @@ export function V4UserInputDialog({ model, autoFocus = true, onSubmit }: V4UserI
         failureStage: "user_input_submit",
       });
     },
-    [onSubmit],
+    [onSubmit, responding],
   );
 
   const handleFreeTextSubmit = useCallback(() => {
+    if (responding) return;
     const trimmed = freeText.trim();
     if (!trimmed && model.freeText) return;
     onSubmit(model.freeText ? { freeText: trimmed } : { optionId: model.options[0]?.optionId });
-  }, [freeText, model.freeText, model.options, onSubmit]);
+  }, [freeText, model.freeText, model.options, onSubmit, responding]);
 
   return (
     <div
       ref={cardRef}
       className="flex w-full flex-col gap-3 rounded-2xl border border-border bg-popover p-3 shadow-xs"
       data-testid={TID_V4_USER_INPUT_DIALOG}
+      aria-busy={responding}
     >
       <p className="text-ui-base font-medium text-foreground">{model.prompt}</p>
       {model.options.length > 0 ? (
@@ -68,9 +108,11 @@ export function V4UserInputDialog({ model, autoFocus = true, onSubmit }: V4UserI
               key={option.optionId}
               type="button"
               variant="ghost"
+              data-focus-style="row"
+              disabled={responding}
               data-testid={testId(TID_V4_USER_INPUT_OPTION, option.optionId)}
               onClick={() => handleOption(option.optionId)}
-              className="h-auto w-full justify-start gap-3 rounded-xl px-3 py-2 text-left whitespace-normal"
+              className="h-auto w-full justify-start gap-3 rounded-xl px-3 py-2 text-left whitespace-normal focus-visible:bg-hover"
             >
               <span className="w-5 shrink-0 text-foreground-subtlest">{index + 1}.</span>
               {option.label}
@@ -84,6 +126,7 @@ export function V4UserInputDialog({ model, autoFocus = true, onSubmit }: V4UserI
             type={model.sensitive ? "password" : "text"}
             aria-label={model.prompt}
             value={freeText}
+            disabled={responding}
             onChange={(event) => setFreeText(event.target.value)}
             onCompositionStart={() => {
               compositionActiveRef.current = true;
@@ -110,12 +153,25 @@ export function V4UserInputDialog({ model, autoFocus = true, onSubmit }: V4UserI
             <Button
               type="button"
               onClick={handleFreeTextSubmit}
+              disabled={responding}
               className="bg-brand text-foreground-inverse hover:bg-brand/80"
             >
-              {intl.formatMessage({ id: "chat.elicitation.submit" })}
+              {intl.formatMessage({
+                id: responding ? "chat.elicitation.submitting" : "chat.elicitation.submit",
+              })}
             </Button>
           </div>
         </div>
+      ) : null}
+      {responding && !model.freeText ? (
+        <p role="status" className="text-ui-base text-foreground-subtle">
+          {intl.formatMessage({ id: "chat.elicitation.submitting" })}
+        </p>
+      ) : null}
+      {responseFailed ? (
+        <p role="alert" className="text-ui-base text-destructive">
+          {intl.formatMessage({ id: "chat.elicitation.responseFailed" })}
+        </p>
       ) : null}
     </div>
   );

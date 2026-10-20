@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ZCodeElicitationRequest } from "@zcode/shared";
 import { ElicitationDialog, normalizeElicitationQuestions } from "@/ElicitationDialog.js";
 import { ZCodeIntlProvider } from "@/i18n/IntlProvider.js";
+import zhCN from "@/i18n/locales/zh-CN.js";
+import enUS from "@/i18n/locales/en-US.js";
+import { shouldIgnoreEscapeForStopGeneration } from "@/v4/composer/escapeStop.js";
 
 function request(requestId = "collaboration-ask"): ZCodeElicitationRequest {
   return {
@@ -47,6 +50,81 @@ afterEach(() => {
 });
 
 describe("ordinary question collaboration", () => {
+  it.each(["option", "textarea", "card", "collapsed", "plan"])(
+    "keeps %s Escape from the window stop shortcut through the actual DOM event path",
+    (target) => {
+      const onRespond = vi.fn();
+      const ask = request();
+      if (target === "plan") ask.schema = { interaction: "plan_approval", toolName: "ExitPlanMode" };
+      const { container } = mount({ request: ask, onRespond });
+      const stop = vi.fn();
+      const listener = (event: KeyboardEvent) => {
+        if (event.key === "Escape" && !shouldIgnoreEscapeForStopGeneration(event)) stop();
+      };
+      window.addEventListener("keydown", listener);
+      try {
+        const card = container.querySelector<HTMLDivElement>("[data-elicitation-dialog-card]")!;
+        if (target === "collapsed") fireEvent.keyDown(card, { key: "Escape" });
+        const element = target === "option" || target === "plan"
+          ? container.querySelector('button[role="option"]')!
+          : target === "textarea" ? container.querySelector("textarea")!
+          : target === "collapsed" ? container.querySelector('button[aria-label="展开: 第一题"]')!
+          : card;
+        fireEvent.keyDown(element, { key: "Escape" });
+        expect(stop).not.toHaveBeenCalled();
+        if (target === "plan") expect(onRespond.mock.calls[0]?.[1]).toBe("decline");
+        else expect(onRespond).not.toHaveBeenCalled();
+        const composer = document.createElement("textarea");
+        container.append(composer);
+        fireEvent.keyDown(composer, { key: "Escape" });
+        expect(stop).toHaveBeenCalledTimes(1);
+      } finally {
+        window.removeEventListener("keydown", listener);
+      }
+    },
+  );
+  it("keeps card focus programmatic and expands from the whole collapsed summary", () => {
+    const { container } = mount();
+    const card = container.querySelector<HTMLDivElement>("[data-elicitation-dialog-card]")!;
+    expect(card.tabIndex).toBe(-1);
+    card.focus();
+    expect(document.activeElement).toBe(card);
+    fireEvent.keyDown(card, { key: "Escape" });
+    const summaries = container.querySelectorAll<HTMLButtonElement>(
+      'button[aria-expanded="false"][aria-label="展开: 第一题"]',
+    );
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]!.getAttribute("aria-label")).toBe("展开: 第一题");
+    expect(summaries[0]!.textContent).toContain("1 / 2");
+    expect(summaries[0]!.querySelector("button")).toBeNull();
+    fireEvent.click(summaries[0]!.querySelector("span span:last-child")!);
+    expect(
+      container.querySelector("[data-elicitation-dialog-body]")?.classList.contains("hidden"),
+    ).toBe(false);
+    const option = container.querySelector<HTMLButtonElement>('button[role="option"]')!;
+    expect(option.hasAttribute("data-slot")).toBe(false);
+  });
+  it("distinguishes question-text and whole-card labels in both locales", () => {
+    expect(zhCN["chat.elicitation.expandQuestion"]).toBe("展开全文");
+    expect(zhCN["chat.elicitation.collapseQuestion"]).toBe("收起全文");
+    expect(zhCN["chat.elicitation.expandDialog"]).toBe("展开");
+    expect(zhCN["chat.elicitation.collapseDialog"]).toBe("收起");
+    expect(enUS["chat.elicitation.expandQuestion"]).toBe("Show full question");
+    expect(enUS["chat.elicitation.collapseQuestion"]).toBe("Hide full question");
+    expect(enUS["chat.elicitation.expandDialog"]).toBe("Expand");
+    expect(enUS["chat.elicitation.collapseDialog"]).toBe("Collapse");
+  });
+  it.each([false, true])("mobile text-input viewport=%s controls keyboard hints", (mobile) => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: mobile && query.includes("max-width: 767px"),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    const { container } = mount();
+    const hint = container.querySelector("[data-elicitation-dialog-footer] > p")!;
+    expect(hint.classList.contains("hidden")).toBe(mobile);
+    expect(hint.className).toContain("[@media(hover:none)]:hidden");
+  });
   it("preserves option preview as inert text", () => {
     expect(normalizeElicitationQuestions(request())[0]?.options[0]?.preview).toContain("完整预览");
     const { container } = mount();

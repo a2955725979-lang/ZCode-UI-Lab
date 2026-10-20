@@ -47,6 +47,10 @@ describe("shared keyboard focus stylesheet", () => {
     expect(stylesheet).toMatch(
       /:not\(\s*\[role="option"\],\s*\[role="menuitem"\],\s*\[role="checkbox"\]/,
     );
+    expect(stylesheet).toMatch(
+      /:not\([^)]*\[data-focus-style="row"\][^)]*\):focus-visible/,
+    );
+    expect(stylesheet).not.toContain("[data-attention-kind]");
     expect(stylesheet).not.toContain("outline-offset: -1px");
     expect(stylesheet).toMatch(
       /@media \(forced-colors: active\)[\s\S]+?outline:\s*2px solid Highlight;\s*outline-offset:\s*2px;/,

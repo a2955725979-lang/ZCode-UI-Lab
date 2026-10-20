@@ -1,10 +1,16 @@
 // composer parity：Esc → stop 的忽略判定（纯函数，无宿主依赖）。
-export function shouldIgnoreEscapeForStopGeneration(event: KeyboardEvent): boolean {
+export function shouldIgnoreEscapeForStopGeneration(
+  event: KeyboardEvent,
+  interactionBoundary: EventTarget | null = null,
+): boolean {
   if (event.defaultPrevented) {
     return true;
   }
 
   const path = event.composedPath();
+  // 权限选项的 Esc 没有本地动作，也不会 preventDefault；必须由所属 pane 的既有
+  // 卡片边界阻断全局 stop，不能把所有 role=option 或其它 pane 一并豁免。
+  if (interactionBoundary && path.includes(interactionBoundary)) return true;
   return path.some((target) => {
     if (!target || typeof target !== "object") {
       return false;

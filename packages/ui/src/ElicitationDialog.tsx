@@ -18,6 +18,7 @@ import { cn } from "@/components/lib/utils.js";
 import { Textarea } from "@/components/ui/textarea.js";
 import { InteractionRequestOriginBadge } from "@/InteractionRequestOriginBadge.js";
 import { isImeComposingKeyEvent } from "@/lib/imeComposition.js";
+import { useIsMobileTextInputViewport } from "@/lib/mobileTextInput.js";
 import type { ElicitationFormDraft } from "@/store/zcodeSessionStoreTypes.js";
 import { useZCodeIntl } from "./i18n/IntlProvider.js";
 
@@ -362,6 +363,7 @@ function ElicitationDialogContent({
   responseError,
 }: ElicitationDialogProps) {
   const { intl } = useZCodeIntl();
+  const isMobileTextInputViewport = useIsMobileTextInputViewport();
   const questions = useMemo(() => normalizeElicitationQuestions(request), [request]);
   const [questionIndex, setQuestionIndex] = useState(
     () => initialFormDraft?.questionIndex ?? normalizeInitialQuestionIndex(request, questions),
@@ -813,8 +815,7 @@ function ElicitationDialogContent({
           })
         : option.description;
     return (
-      <Button
-        variant="ghost"
+      <button
         key={option.value}
         ref={(node) => {
           optionRefs.current[index] = node;
@@ -829,8 +830,8 @@ function ElicitationDialogContent({
         onFocus={() => setActiveOptionIndex(index)}
         onKeyDown={handleOptionKeyDown}
         className={cn(
-          "flex h-auto w-full items-center justify-start gap-3 rounded-xl border-0 px-3 py-2 text-left whitespace-normal outline-none transition-colors focus-visible:bg-hover",
-          isSelected ? "bg-selected hover:bg-selected" : isActive ? "bg-hover" : "hover:bg-hover",
+          "flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left outline-none transition-colors focus-visible:bg-hover",
+          isSelected ? "bg-selected" : isActive ? "bg-hover" : "hover:bg-hover",
         )}
       >
         {question.multiSelect ? (
@@ -873,7 +874,7 @@ function ElicitationDialogContent({
             </span>
           ) : null}
         </span>
-      </Button>
+      </button>
     );
   };
 
@@ -1044,7 +1045,7 @@ function ElicitationDialogContent({
       {/* Bugfix: 手机远控视口较短，长问题和多选项会把按钮顶出弹窗；卡片限高后让内容区内部滚动。 */}
       <div
         ref={cardRef}
-        tabIndex={0}
+        tabIndex={-1}
         data-elicitation-dialog-card="true"
         aria-busy={responding}
         className="relative z-1 flex w-full max-h-[min(72dvh,42rem)] flex-col overflow-hidden rounded-2xl border border-border bg-popover shadow-xs outline-none"
@@ -1198,7 +1199,16 @@ function ElicitationDialogContent({
           </div>
 
           {!isDialogExpanded ? (
-            <div className="flex min-w-0 items-center justify-between gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              aria-expanded={isDialogExpanded}
+              aria-label={`${dialogCollapseLabel}: ${titleQuestion}`}
+              title={dialogCollapseLabel}
+              disabled={responding}
+              onClick={() => setExpanded(true)}
+              className="h-auto min-w-0 w-full justify-between gap-2 whitespace-normal px-0 text-left"
+            >
               <span className="flex min-w-0 flex-1 items-center gap-2 text-ui-base font-medium text-foreground">
                 {titleHeader ? (
                   <Badge
@@ -1213,19 +1223,8 @@ function ElicitationDialogContent({
               <span className="shrink-0 text-ui-base font-medium text-foreground-subtlest">
                 {`${Math.min(questionIndex + 1, Math.max(questions.length, 1))} / ${Math.max(questions.length, 1)}`}
               </span>
-              <Button
-                type="button"
-                size="icon-xs"
-                variant="ghost"
-                aria-expanded={isDialogExpanded}
-                aria-label={dialogCollapseLabel}
-                title={dialogCollapseLabel}
-                disabled={responding}
-                onClick={() => setExpanded(true)}
-              >
-                <ChevronUp className="size-3" />
-              </Button>
-            </div>
+              <ChevronUp className="size-3 shrink-0" />
+            </Button>
           ) : null}
 
           {responseError && isDialogExpanded ? (
@@ -1240,7 +1239,12 @@ function ElicitationDialogContent({
               !isDialogExpanded ? "hidden" : undefined,
             )}
           >
-            <p className="flex min-w-0 flex-1 items-center gap-2 text-ui-base text-foreground-subtle max-sm:basis-full">
+            <p
+              className={cn(
+                "flex min-w-0 flex-1 items-center gap-2 text-ui-base text-foreground-subtle max-sm:basis-full [@media(hover:none)]:hidden",
+                isMobileTextInputViewport && "hidden",
+              )}
+            >
               <Info className="size-4 shrink-0 text-foreground" />
               <span className="min-w-0">
                 {intl.formatMessage({

@@ -13,7 +13,10 @@ vi.mock("@/i18n/IntlProvider.js", () => ({
   }),
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 const suggestions = [0, 1, 2, 3].map((index) => ({
   label: `建议 ${index + 1}`,
@@ -39,6 +42,16 @@ function mount(canAccept = true) {
 }
 
 describe("FollowupPreview", () => {
+  it("hides the keycap on mobile text-input viewports and has a hoverless CSS gate", () => {
+    vi.stubGlobal("matchMedia", () => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    const view = mount();
+    expect(view.container.querySelector("kbd")).toBeNull();
+    expect(screen.getAllByRole("button")).toHaveLength(3);
+  });
   it("最多三个secondary按钮；标题仅作组标签，只有第一条带Tab键帽", () => {
     const { container } = mount();
     const group = screen.getByRole("group", { name: "下一步建议" });
@@ -47,6 +60,7 @@ describe("FollowupPreview", () => {
     expect(group.textContent).toBe("建议 1Tab建议 2建议 3");
     expect(container.querySelectorAll("kbd")).toHaveLength(1);
     expect(container.querySelector("kbd")?.textContent).toBe("Tab");
+    expect(container.querySelector("kbd")?.className).toContain("[@media(hover:none)]:hidden");
     for (const button of buttons) {
       expect(button.dataset.variant).toBe("secondary");
       expect(button.textContent).not.toContain("完整下一步");
