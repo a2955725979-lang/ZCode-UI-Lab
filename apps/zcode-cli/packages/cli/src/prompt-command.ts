@@ -31,7 +31,7 @@ import {
   resolveWorkflowModeRuntimeConfig,
   WORKFLOW_DISABLED_NOTICE,
 } from "./workflow-mode.js";
-import type { DynamicWorkflowMode } from "@zcode/shared";
+import { stripFollowupSuggestionDirectives, type DynamicWorkflowMode } from "@zcode/shared";
 import type { CommandCenterApp, SlashCommand } from "./command-center.js";
 import type {
   CliPermissionMode,
@@ -358,10 +358,11 @@ export const runPrompt = async (
     stopObservingEvents();
     // `response` 取**最后**一个回合的文本：工作流结算后的那次总结才是答案。
     // 未进入等待时数组只有一项，于是 response ≡ result.response，行为逐字节不变。
-    const turnResponses = [result.response, ...observer.waitPhaseTurnResponses()].filter(
-      (text) => text.trim().length > 0,
-    );
-    const response = turnResponses.at(-1) ?? result.response;
+    // 只投影最终展示文本；保留 runtime 原文与事件，避免把 Web 历史元数据带出为回答。
+    const turnResponses = [result.response, ...observer.waitPhaseTurnResponses()]
+      .map((text) => stripFollowupSuggestionDirectives(text))
+      .filter((text) => text.trim().length > 0);
+    const response = turnResponses.at(-1) ?? stripFollowupSuggestionDirectives(result.response);
     // 只在真的多于一个回合时才带上数组——单回合运行的 json 输出因此逐字节不变。
     // 刻意在两处 summary 里各自内联这个条件展开而不是共享一个变量：展开一个联合类型的
     // 变量会让 TS 把键推成可选（`turnResponses?: string[]`），而 formatJson 只收 JsonValue。
@@ -558,7 +559,7 @@ async function runPromptCommandCenterCommand(
   const nextTraceId = result.traceId ?? traceId;
   if (result.selection) {
     ctx.stderr.write(
-      `Error: ${result.response}\n${TARGET_SELECTION_UNAVAILABLE_ERROR}${nextTraceId ? ` (traceId: ${nextTraceId})` : ""}\n`,
+      `Error: ${stripFollowupSuggestionDirectives(result.response)}\n${TARGET_SELECTION_UNAVAILABLE_ERROR}${nextTraceId ? ` (traceId: ${nextTraceId})` : ""}\n`,
     );
     return 1;
   }
@@ -573,13 +574,13 @@ async function runPromptCommandCenterCommand(
       formatJson({
         sessionId: String(app.sessionId),
         ...(nextTraceId ? { traceId: nextTraceId } : {}),
-        response: result.response,
+        response: stripFollowupSuggestionDirectives(result.response),
       }),
     );
     return 0;
   }
 
-  ctx.stdout.write(`${result.response}\n`);
+  ctx.stdout.write(`${stripFollowupSuggestionDirectives(result.response)}\n`);
   return 0;
 }
 

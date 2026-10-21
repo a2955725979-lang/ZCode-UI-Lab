@@ -13,3 +13,5 @@ manual/TUI/no trusted host fact → no injected option → terminal
 ```
 
 Regression checks cover CLI normalization and unsupported invocations, protocol-to-runtime propagation, trusted resolver precedence and generic-server fallback, process arguments, stable shared prompt identity, Web omission of Desktop capability claims, and terminal/workflow/custom prompt omission. Tests use injected fake prompt/runtime dependencies and never call a model.
+
+Round 4: headless final answer text (`--prompt`, slash/target command results and JSON result summaries) uses the shared follow-up suffix projection. Stored responses and runtime event payloads remain unchanged. `stream-json` event lines are a machine event protocol, not the final answer projection; changing their deltas or replay payloads is outside this round's no-protocol-change limit and remains separately recorded.
