@@ -18,6 +18,8 @@ button / Tab → existing composer acceptance guard → draft text + focus (no s
 
 ## Acceptance
 
+- Round 4: the turn navigator strips the shared-parser suffix before truncating or normalizing assistant previews, including streaming previews. Source rows and user previews stay unchanged; quoted/code/list examples retain the parser's existing semantics.
+
 - RED/GREEN parser cases: zero, one, three and more than three suggestions; malformed parameters; body-middle examples; code/quote/list examples; partial streaming; CRLF; escaped quotes and backslashes. Rendering, clipboard and share reuse the same stripping function.
 - Context-builder checks the exact English lines, stable caching, terminal omission and workflow actor omission without model requests.
 - Preview checks three-button limit, secondary styling, accessible group label, tooltip text, first-button keycap, no draft-state controls, and existing pointer/keyboard callback semantics.

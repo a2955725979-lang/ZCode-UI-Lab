@@ -1,9 +1,7 @@
 import type { ConversationTurnRenderUnit } from "@/v4/conversationTurnRenderUnits.js";
+import { stripFollowupSuggestionDirectives } from "@zcode/shared";
 
-export type ConversationTurnNavigatorAssistantPreviewKind =
-  | "empty"
-  | "running"
-  | "text";
+export type ConversationTurnNavigatorAssistantPreviewKind = "empty" | "running" | "text";
 
 export interface ConversationTurnNavigatorItem {
   key: string;
@@ -147,7 +145,10 @@ function buildAssistantPreview(
   if (unit.assistantTextRows.length > 0) {
     return {
       assistantPreview: buildPreviewText({
-        texts: unit.assistantTextRows.map((row) => row.text),
+        // 必须先在原始 Markdown 上投影，再截断/合并空白，否则元数据会变成导航摘要。
+        texts: unit.assistantTextRows.map((row) =>
+          stripFollowupSuggestionDirectives(row.text, { streaming: row.state === "streaming" }),
+        ),
         fallback: options.assistantEmptyPreview,
         maxPreviewChars: options.maxPreviewChars,
         maxPreviewParagraphs: options.maxPreviewParagraphs,
@@ -176,26 +177,20 @@ export function buildConversationTurnNavigatorItems(
   const resolvedOptions: Required<BuildConversationTurnNavigatorItemsOptions> = {
     ...options,
     maxPreviewChars: options.maxPreviewChars ?? DEFAULT_MAX_PREVIEW_CHARS,
-    maxPreviewParagraphs:
-      options.maxPreviewParagraphs ?? DEFAULT_MAX_PREVIEW_PARAGRAPHS,
+    maxPreviewParagraphs: options.maxPreviewParagraphs ?? DEFAULT_MAX_PREVIEW_PARAGRAPHS,
   };
 
   return units.flatMap((unit, unitIndex) => {
     // provider/store 的物理 role=user 还包含 background/goal/mailbox
     // 等系统上下文；目录代表用户主动 query，只能使用投影明确裁决的 realUser。
-    const realUserInputs = unit.visibleUserInputs.filter(
-      (row) => row.origin === "realUser",
-    );
+    const realUserInputs = unit.visibleUserInputs.filter((row) => row.origin === "realUser");
     if (unit.timelineOnly || realUserInputs.length === 0) {
       return [];
     }
 
     // 导航项按 query 拆分，但 hover 的 assistant 摘要保持旧产品语义：
     // 取所属 product turn 的文本结果，不在 renderer 猜测 guide 回复分段。
-    const { assistantPreview, assistantPreviewKind } = buildAssistantPreview(
-      unit,
-      resolvedOptions,
-    );
+    const { assistantPreview, assistantPreviewKind } = buildAssistantPreview(unit, resolvedOptions);
     return realUserInputs.map((row, queryIndex) => ({
       // 不能以 product turn 为目录粒度，并把同一 turn 的 steer query
       // 全部拼进一个 preview。目录真正导航的是用户可见 query，必须用稳定 row
@@ -235,8 +230,7 @@ export function resolveConversationTurnNavigatorActiveUnitIndex({
 
   const itemByUnitIndex = new Map(items.map((item) => [item.unitIndex, item]));
   const viewportStart = resolveFiniteNonNegative(scrollOffsetPx);
-  const viewportEnd =
-    viewportStart + Math.max(1, resolveFiniteNonNegative(viewportHeightPx));
+  const viewportEnd = viewportStart + Math.max(1, resolveFiniteNonNegative(viewportHeightPx));
 
   let activeUnitIndex: number | undefined;
   let activeDistance = Number.POSITIVE_INFINITY;
@@ -250,8 +244,7 @@ export function resolveConversationTurnNavigatorActiveUnitIndex({
     if (rowEnd < viewportStart || rowStart > viewportEnd) {
       continue;
     }
-    const distanceToViewportStart =
-      rowStart <= viewportStart ? 0 : rowStart - viewportStart;
+    const distanceToViewportStart = rowStart <= viewportStart ? 0 : rowStart - viewportStart;
     if (distanceToViewportStart < activeDistance) {
       activeUnitIndex = item.unitIndex;
       activeDistance = distanceToViewportStart;
@@ -286,8 +279,7 @@ export function resolveConversationTurnNavigatorActiveQueryRowId({
   if (positions.length === 0) return undefined;
 
   const viewportStart = resolveFiniteNonNegative(scrollOffsetPx);
-  const viewportEnd =
-    viewportStart + Math.max(1, resolveFiniteNonNegative(viewportHeightPx));
+  const viewportEnd = viewportStart + Math.max(1, resolveFiniteNonNegative(viewportHeightPx));
   const normalized = positions
     .map((position) => {
       const start = resolveFiniteNonNegative(position.start);
@@ -304,8 +296,7 @@ export function resolveConversationTurnNavigatorActiveQueryRowId({
   );
   if (visible.length > 0) {
     return visible.reduce((nearest, candidate) =>
-      Math.abs(candidate.start - viewportStart) <
-      Math.abs(nearest.start - viewportStart)
+      Math.abs(candidate.start - viewportStart) < Math.abs(nearest.start - viewportStart)
         ? candidate
         : nearest,
     ).rowId;

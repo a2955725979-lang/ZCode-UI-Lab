@@ -109,6 +109,40 @@ function units(rows: ConversationRow[]) {
 }
 
 describe("conversation turn navigator helpers", () => {
+  it("does not leak follow-up metadata into completed or streaming navigator previews", () => {
+    const directive = '::next-prompt{label="Next" prompt="Inspect the result"}';
+    for (const state of ["complete", "streaming"] as const) {
+      const row = { ...assistantText(3, "turn-1", `Visible answer\n${directive}`), state };
+      const items = buildConversationTurnNavigatorItems(
+        units([turnHeader(1, "turn-1"), userInput(2, "turn-1", "Question"), row]),
+        {
+          assistantEmptyPreview: "Empty",
+          assistantRunningPreview: "Running",
+          userFallbackPreview: "User",
+        },
+      );
+      expect(items[0]?.assistantPreview).toBe("Visible answer");
+      expect(row.text).toContain(directive);
+    }
+  });
+
+  it("preserves a quoted follow-up example in the navigator", () => {
+    const text = '> ::next-prompt{label="Example" prompt="Keep this example"}';
+    const items = buildConversationTurnNavigatorItems(
+      units([
+        turnHeader(1, "turn-1"),
+        userInput(2, "turn-1", "Question"),
+        assistantText(3, "turn-1", text),
+      ]),
+      {
+        assistantEmptyPreview: "Empty",
+        assistantRunningPreview: "Running",
+        userFallbackPreview: "User",
+      },
+    );
+    expect(items[0]?.assistantPreview).toContain("::next-prompt");
+  });
+
   it("TN01/TN07：宽 conversation 允许探测完整目录，窄 conversation 零请求", () => {
     const base = {
       canLoadOlder: true,
@@ -196,9 +230,7 @@ describe("conversation turn navigator helpers", () => {
     expect(items[0]?.assistantPreview).toContain("Assistant paragraph two");
     expect(items[0]?.assistantPreview).not.toContain("private reasoning");
     expect(items[1]?.assistantPreview).toBe(items[0]?.assistantPreview);
-    expect(items.map((item) => item.userPreview).join(" ")).not.toContain(
-      "Assistant paragraph",
-    );
+    expect(items.map((item) => item.userPreview).join(" ")).not.toContain("Assistant paragraph");
     expect(new Set(items.map((item) => item.key)).size).toBe(3);
   });
 
