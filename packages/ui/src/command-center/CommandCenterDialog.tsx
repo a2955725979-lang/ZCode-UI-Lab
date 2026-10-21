@@ -869,7 +869,7 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
     if (
       !hasSearchQuery ||
       !shouldShowConversationSection ||
-      (!taskList.loading && conversationRows.length === 0)
+      (!taskList.loading && !taskList.searchIndexRebuilding && conversationRows.length === 0)
     ) {
       return null;
     }
@@ -880,7 +880,18 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
         : conversationRows.slice(0, COMMAND_CENTER_SECTION_LIMIT);
     return (
       <CommandGroup heading={intl.formatMessage({ id: "commandCenter.section.conversations" })}>
-        {taskList.loading && conversationRows.length === 0 ? (
+        {taskList.searchIndexRebuilding ? (
+          <CommandEmpty className="px-4 py-5 text-foreground-subtle">
+            {intl.formatMessage({ id: "taskSearch.rebuilding" })}
+            <button
+              type="button"
+              className="ml-2 text-brand underline underline-offset-2"
+              onClick={() => void taskList.refresh()}
+            >
+              {intl.formatMessage({ id: "taskSearch.retry" })}
+            </button>
+          </CommandEmpty>
+        ) : taskList.loading && conversationRows.length === 0 ? (
           <CommandEmpty className="px-4 py-5 text-foreground-subtle">
             {intl.formatMessage({ id: "taskSearch.loading" })}
           </CommandEmpty>
@@ -980,6 +991,7 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
     (shouldShowFileSection && fileRows.length > 0);
   const hasSearchStatus =
     taskList.loading ||
+    taskList.searchIndexRebuilding ||
     workspaceFilesLoading ||
     (shouldShowFileSection && Boolean(workspaceFilesError));
 
@@ -1012,7 +1024,10 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
     >
       <Command shouldFilter={false} loop className={quickPickCommandClassName}>
         <div className="border-b border-border px-2 pt-2 pb-2">
-          <div className="flex h-8 items-center gap-2 rounded-full border border-input-border bg-input px-2.5 transition-colors hover:border-input-border-hover focus-within:border-input-border-focused focus-within:bg-input-focused">
+          <div
+            data-command-center-search-shell
+            className="flex h-8 items-center gap-2 rounded-full border border-input-border bg-input px-2.5 transition-colors hover:border-input-border-hover focus-within:border-input-border-focused focus-within:bg-input-focused"
+          >
             <SearchIcon className="size-4 shrink-0 text-foreground-subtlest" />
             <CommandPrimitive.Input
               value={rawQuery}

@@ -11,6 +11,10 @@ const inputGroup = await readFile(
 );
 
 const stylesheet = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+const commandCenter = await readFile(
+  new URL("../src/command-center/CommandCenterDialog.tsx", import.meta.url),
+  "utf8",
+);
 
 // DOM focus tests cannot detect a shared CSS reset that hides every keyboard indicator.
 // Keep this source guard in addition to the real-component screenshot acceptance fixture.
@@ -47,9 +51,7 @@ describe("shared keyboard focus stylesheet", () => {
     expect(stylesheet).toMatch(
       /:not\(\s*\[role="option"\],\s*\[role="menuitem"\],\s*\[role="checkbox"\]/,
     );
-    expect(stylesheet).toMatch(
-      /:not\([^)]*\[data-focus-style="row"\][^)]*\):focus-visible/,
-    );
+    expect(stylesheet).toMatch(/:not\([^)]*\[data-focus-style="row"\][^)]*\):focus-visible/);
     expect(stylesheet).not.toContain("[data-attention-kind]");
     expect(stylesheet).not.toContain("outline-offset: -1px");
     expect(stylesheet).toMatch(
@@ -68,5 +70,17 @@ describe("shared keyboard focus stylesheet", () => {
       /\[data-chat-prompt-editor-shell\][^{]+?\[contenteditable="true"\]:focus-visible\s*\{\s*outline:\s*none;/,
     );
     expect(stylesheet).not.toMatch(/\[data-chat-prompt-editor-shell\][^{]*::(?:before|after)\s*\{/);
+  });
+
+  it("keeps Cmd+K keyboard focus on its rounded shell instead of a rectangular input outline", () => {
+    expect(commandCenter).toContain("data-command-center-search-shell");
+    expect(commandCenter).toContain("focus-within:border-input-border-focused");
+    expect(commandCenter).toContain("focus-within:bg-input-focused");
+    expect(stylesheet).toMatch(
+      /\[data-command-center-search-shell\] \[cmdk-input\]:focus-visible\s*\{\s*outline:\s*none;/,
+    );
+    expect(stylesheet).toMatch(
+      /@media \(forced-colors: active\)[\s\S]+?\[data-command-center-search-shell\]:has\(\[cmdk-input\]:focus-visible\)\s*\{\s*outline:\s*2px solid Highlight;/,
+    );
   });
 });

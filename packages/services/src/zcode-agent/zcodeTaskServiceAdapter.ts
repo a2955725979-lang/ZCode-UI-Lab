@@ -140,7 +140,7 @@ import type {
   SessionMessageDeliveryResult,
   SessionMessageSendRequested,
 } from "#src/session/sessionMailbox.js";
-import { TaskIndexRepo } from "#src/session/taskIndexRepo.js";
+import { TaskIndexRepo, TaskSearchIndexNotReadyError } from "#src/session/taskIndexRepo.js";
 import type {
   IZCodeAgentService,
   ZCodeAgentServiceEvent,
@@ -257,7 +257,8 @@ function formatZCodeAgentLogDate(now: Date): string {
 
 function resolveZCodeAgentCurrentLogFilePath(now = new Date()): string {
   const configuredLogDir = process.env.ZCODE_LOG_DIR?.trim();
-  const logDir = configuredLogDir || join(getApplicationHomeDir(process.env, homedir()), ".zcode", "cli", "log");
+  const logDir =
+    configuredLogDir || join(getApplicationHomeDir(process.env, homedir()), ".zcode", "cli", "log");
   return join(logDir, `zcode-${formatZCodeAgentLogDate(now)}.jsonl`);
 }
 
@@ -2753,10 +2754,16 @@ export function createZCodeTaskServiceAdapter(
     // remoteTimelineTaskStore 补充链路；侧栏 5 视图 + remote shard 的无搜索行集合
     // 走上方三个分区读取。workspace 行在客户端用各 endpoint 的 task 行 + session detail 构建。
     async listTaskList(params: ZCodeTaskListQuery): Promise<ZCodeTaskListResult> {
-      const result = await taskIndexRepo.queryTaskList({
-        ...params,
-        provider: GLM_PROVIDER,
-      });
+      const query = () => taskIndexRepo.queryTaskList({ ...params, provider: GLM_PROVIDER });
+      let result: Awaited<ReturnType<typeof query>>;
+      try {
+        result = await query();
+      } catch (error) {
+        if (!(error instanceof TaskSearchIndexNotReadyError) || !params.search?.trim()) throw error;
+        // 只有用户显式全文搜索触发 cold workspace 的只读 CLI 枚举。
+        await taskIndexSyncer.ensureSearchReadyForExplicitQuery(params.workspaceScopes);
+        result = await query();
+      }
       return {
         ...result,
         items: result.items.map(rememberIndexedTaskMeta),
@@ -3366,15 +3373,16 @@ export function createZCodeTaskServiceAdapter(
           titleLength: meta.title.length,
         });
         try {
-          const sendRename = () => options.zcodeAgentService.sendConversationCommandV4({
-            workspacePath: params.workspacePath,
-            workspaceIdentity: params.workspaceIdentity,
-            envelope: createHostCommandEnvelope({
-              type: "renameSession",
-              sessionId: params.taskId,
-              payload: { title: params.title },
-            }),
-          });
+          const sendRename = () =>
+            options.zcodeAgentService.sendConversationCommandV4({
+              workspacePath: params.workspacePath,
+              workspaceIdentity: params.workspaceIdentity,
+              envelope: createHostCommandEnvelope({
+                type: "renameSession",
+                sessionId: params.taskId,
+                payload: { title: params.title },
+              }),
+            });
           let ack = await sendRename();
           if (ack.status === "rejected" && ack.reasonCode === "proto.sessionNotFound") {
             // 未打开的历史会话只有 tasks-index 行；直接 renameSession 会被拒绝，旧 custom
@@ -3392,15 +3400,17 @@ export function createZCodeTaskServiceAdapter(
               // 首次命令已明确 rejected；新 commandId 避免重放那次拒绝的幂等结果。
               ack = await sendRename();
             } finally {
-              await options.zcodeAgentService.unsubscribeConversationV4({
-                ...target,
-                subscriptionId: subscription.ack.subscriptionId,
-              }).catch((error) => {
-                logger.warn(undefined, "释放重命名临时会话订阅失败", {
-                  taskId: params.taskId,
-                  message: error instanceof Error ? error.message : String(error),
+              await options.zcodeAgentService
+                .unsubscribeConversationV4({
+                  ...target,
+                  subscriptionId: subscription.ack.subscriptionId,
+                })
+                .catch((error) => {
+                  logger.warn(undefined, "释放重命名临时会话订阅失败", {
+                    taskId: params.taskId,
+                    message: error instanceof Error ? error.message : String(error),
+                  });
                 });
-              });
             }
           }
           assertV4CommandAckOk("renameSession", ack, `session=${params.taskId}`);

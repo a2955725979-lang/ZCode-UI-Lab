@@ -186,6 +186,12 @@ html[data-document-hidden] *::after {
   outline: none;
 }
 
+/* Cmd+K 的输入框由圆角外壳显示焦点；全局键盘轮廓若落在内部 input，
+ * 会画出截图中的直角内框。仅取消这个内框，保留外壳语义聚焦边框。 */
+[data-command-center-search-shell] [cmdk-input]:focus-visible {
+  outline: none;
+}
+
 /* 修复原因：contenteditable 也匹配 tabindex 的共享规则，非 layer outline 会覆盖 outline-none。
  * Composer 沿用原有语义聚焦边框和背景，不再附加底线或装饰性外框。 */
 [data-chat-prompt-editor-shell] [data-lexical-chat-input] [contenteditable="true"]:focus-visible {
@@ -229,6 +235,11 @@ html[data-document-hidden] *::after {
   [data-chat-prompt-editor-shell]:has(
     [data-lexical-chat-input] [contenteditable="true"]:focus-visible
   ) {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  [data-command-center-search-shell]:has([cmdk-input]:focus-visible) {
     outline: 2px solid Highlight;
     outline-offset: 2px;
   }

@@ -108,6 +108,7 @@ export function useGlobalTaskList(params: {
   const [sourceTotal, setSourceTotal] = useState(0);
   const [sourceHasMore, setSourceHasMore] = useState(false);
   const [loading, setLoading] = useState(workspaceScopes.length > 0);
+  const [searchIndexRebuilding, setSearchIndexRebuilding] = useState(false);
   const requestSerialRef = useRef(0);
   const manualRefreshSerialRef = useRef(0);
 
@@ -142,6 +143,7 @@ export function useGlobalTaskList(params: {
         setSourceTotal(0);
         setSourceHasMore(false);
         setLoading(false);
+        setSearchIndexRebuilding(false);
         return;
       }
       if (!controllerRegistry) {
@@ -170,8 +172,25 @@ export function useGlobalTaskList(params: {
         setItems(nextItems);
         setSourceTotal(result.total);
         setSourceHasMore(result.hasMore);
+        setSearchIndexRebuilding(false);
       } catch (error) {
         if (requestSerialRef.current === requestSerial) {
+          if (
+            query.search &&
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            error.code === "TASK_SEARCH_INDEX_NOT_READY"
+          ) {
+            // 冷索引尚未回填时不能把旧查询结果或空列表冒充完整搜索结果。
+            itemsRef.current = [];
+            setItems([]);
+            setSourceTotal(0);
+            setSourceHasMore(false);
+            setSearchIndexRebuilding(true);
+          } else {
+            setSearchIndexRebuilding(false);
+          }
           // Controller 查询失败时保留最后可信列表，避免单 source 异常清空其他 workspace。
           logger.error(`[useGlobalTaskList] Controller 加载 ${params.kind} 列表失败`, error);
         }
@@ -206,11 +225,11 @@ export function useGlobalTaskList(params: {
   }, [controllerRevision, load, taskListVersionSignature, workspaceSourceGenerationSignature]);
 
   const filteredItems = useMemo(
-    () => params.predicate ? items.filter(params.predicate) : items,
+    () => (params.predicate ? items.filter(params.predicate) : items),
     [items, params.predicate],
   );
   const visibleItems = useMemo(
-    () => params.expanded ? filteredItems : filteredItems.slice(0, params.collapsedLimit),
+    () => (params.expanded ? filteredItems : filteredItems.slice(0, params.collapsedLimit)),
     [filteredItems, params.collapsedLimit, params.expanded],
   );
   const hasRemoteScope = params.workspaceTabs.some((tab) => Boolean(tab.workspaceIdentity));
@@ -220,6 +239,7 @@ export function useGlobalTaskList(params: {
     hasMore: params.predicate ? visibleItems.length < filteredItems.length : sourceHasMore,
     loading,
     syncingRemoteWorkspaces: loading && hasRemoteScope,
+    searchIndexRebuilding,
     refresh,
   };
 }

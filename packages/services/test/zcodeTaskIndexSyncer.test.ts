@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Emitter, type Event } from "@zcode/rpc";
@@ -10,7 +10,8 @@ import type {
   ZCodeAgentSessionTarget,
 } from "../src/zcode-agent/zcodeAgent.js";
 import { TaskIndexRepo } from "../src/session/taskIndexRepo.js";
-import { setDataBaseDir } from "../src/paths.js";
+import { getLegacyTaskSessionSnapshotPath, setDataBaseDir } from "../src/paths.js";
+import { writeImportedClaudeTaskSnapshot } from "../src/session/claude-native/persistImportedClaudeTask.js";
 import { createZCodeTaskIndexSyncer } from "../src/zcode-agent/zcodeTaskIndexSyncer.js";
 import type {
   ModelSelection,
@@ -204,6 +205,7 @@ function setupEnv(
     WorkspaceConfigTopicWireFrame
   >();
   const lifecycleEmitter = new Emitter<ZCodeAgentRuntimeLifecycleEvent>();
+  const repo = new TaskIndexRepo();
   const agent: IZCodeAgentService = {
     subscribeSessionsIndexV4: vi.fn(async () => {
       const ack = {
@@ -248,6 +250,24 @@ function setupEnv(
       snapshotWith(target.sessionId, target.workspacePath),
     ),
     listSessions: vi.fn(async () => []),
+    readPersistedTaskSearchPage: vi.fn(async (params) => {
+      const rows = await repo.listTaskMetas({
+        workspacePath: params.workspacePath,
+        workspaceIdentity: params.workspaceIdentity,
+      });
+      const start = Number(params.cursor ?? 0);
+      const batch = rows.slice(start, start + params.limit);
+      const next = start + batch.length;
+      return {
+        items: batch.map((row) => ({
+          sessionId: row.taskId,
+          sourceRevision: "0".repeat(64),
+          searchableText: "",
+        })),
+        ...(next < rows.length ? { nextCursor: String(next) } : {}),
+        complete: next >= rows.length,
+      };
+    }),
     readSession: vi.fn(async (target: ZCodeAgentSessionTarget) =>
       snapshotWith(target.sessionId, target.workspacePath),
     ),
@@ -259,7 +279,7 @@ function setupEnv(
     indexEmitter,
     configEmitter,
     lifecycleEmitter,
-    repo: new TaskIndexRepo(),
+    repo,
   };
   currentEnv = env;
   return env;
@@ -554,6 +574,436 @@ describe("createZCodeTaskIndexSyncer", () => {
     syncer.disposeAll();
     env.indexEmitter.dispose();
     env.configEmitter.dispose();
+  });
+
+  it("实时正文索引只过滤 assistant 尾部建议，保留 user 原文与 Markdown", async () => {
+    const env = setupEnv();
+    const syncer = createZCodeTaskIndexSyncer({
+      agentService: env.agent,
+      taskIndexRepo: env.repo,
+    });
+    const snapshot = snapshotWith("sess_suggestions", "/repo", {
+      title: "保留用户请求",
+      userMessageText: '请解释 ::next-prompt{label="用户原文" prompt="保持"}',
+      assistantMessageText: '**答复正文**\n\n::next-prompt{label="助手建议" prompt="继续"}',
+    });
+    const write = vi.spyOn(env.repo, "syncTaskMeta");
+    await syncer.syncSnapshotAndBroadcast(snapshot, { broadcastReason: "task_status_changed" });
+    expect(write).toHaveBeenCalledWith(
+      expect.objectContaining({
+        searchableText: '请解释 ::next-prompt{label="用户原文" prompt="保持"}\n**答复正文**',
+      }),
+    );
+    await env.repo.markSearchRebuildComplete({ workspacePath: "/repo" });
+    expect(
+      await env.repo.queryTaskList({
+        workspaceScopes: [{ workspacePath: "/repo" }],
+        search: "助手建议",
+      }),
+    ).toMatchObject({ total: 0 });
+    syncer.disposeAll();
+  });
+
+  it("冷历史超过 200 条时分页遍历，并为首帧缺失行按 ID 补元数据", async () => {
+    const ids = Array.from(
+      { length: 205 },
+      (_, index) => `task-${String(index + 1).padStart(3, "0")}`,
+    );
+    const env = setupEnv({
+      initialSessions: ids
+        .slice(0, 200)
+        .map((id) => summaryOf(id, "completedSuccess", { title: `标题 ${id}` })),
+    });
+    vi.mocked(env.agent.readPersistedTaskSearchPage).mockImplementation(async (params) => {
+      const start = Number(params.cursor ?? 0);
+      const batch = ids.slice(start, start + params.limit);
+      const next = start + batch.length;
+      return {
+        items: batch.map((sessionId) => ({
+          sessionId,
+          sourceRevision: "a".repeat(64),
+          searchableText: `正文 ${sessionId}`,
+        })),
+        ...(next < ids.length ? { nextCursor: String(next) } : {}),
+        complete: next >= ids.length,
+      };
+    });
+    vi.mocked(env.agent.listSessions).mockImplementation(async (params) =>
+      (params.sessionIds ?? []).map((sessionId) => ({
+        sessionId,
+        workspace: { workspacePath: "/repo", workspaceKey: "/repo" },
+        sessionKind: "interactive" as const,
+        title: `标题 ${sessionId}`,
+        mode: "build" as const,
+        status: "completed" as const,
+        createdAt: 1,
+        updatedAt: 100,
+        ...(sessionId === "task-205" ? { archivedAt: 101 } : {}),
+      })),
+    );
+    const syncer = createZCodeTaskIndexSyncer({
+      agentService: env.agent,
+      taskIndexRepo: env.repo,
+    });
+    syncer.ensureWorkspaceSubscription({ workspacePath: "/repo" });
+    await vi.waitFor(
+      async () => {
+        const result = await env.repo.queryTaskList({
+          workspaceScopes: [{ workspacePath: "/repo" }],
+          search: "正文 task-204",
+        });
+        expect(result.total).toBe(1);
+      },
+      { timeout: 5000 },
+    );
+    expect(env.agent.readPersistedTaskSearchPage).toHaveBeenCalledTimes(4);
+    expect((await env.repo.listTaskMetas({ workspacePath: "/repo" })).length).toBe(205);
+    expect(
+      await env.repo.queryTaskList({
+        workspaceScopes: [{ workspacePath: "/repo" }],
+        kind: "archived",
+        search: "正文 task-205",
+      }),
+    ).toMatchObject({ total: 1 });
+    syncer.disposeAll();
+  });
+
+  it("冷分页游标不前进时持续未就绪，不报告空搜索完成", async () => {
+    const env = setupEnv();
+    vi.mocked(env.agent.readPersistedTaskSearchPage).mockResolvedValue({
+      items: [],
+      nextCursor: "same",
+      complete: false,
+    });
+    const syncer = createZCodeTaskIndexSyncer({
+      agentService: env.agent,
+      taskIndexRepo: env.repo,
+    });
+    syncer.ensureWorkspaceSubscription({ workspacePath: "/repo" });
+    await vi.waitFor(() => expect(env.agent.readPersistedTaskSearchPage).toHaveBeenCalledTimes(2));
+    await expect(
+      env.repo.queryTaskList({ workspaceScopes: [{ workspacePath: "/repo" }], search: "任意" }),
+    ).rejects.toMatchObject({ code: "TASK_SEARCH_INDEX_NOT_READY" });
+    syncer.disposeAll();
+  });
+
+  it("重启后未打开的旧 workspace 仅由显式搜索按需枚举，不建立后台订阅", async () => {
+    const env = setupEnv({ runtimeLifecycle: true });
+    await env.repo.seedTaskMetaIfMissing({
+      taskId: "cold-search",
+      traceId: "trace-cold-search",
+      title: "旧任务",
+      workspacePath: "/repo",
+      createdAt: 1,
+      updatedAt: 2,
+      mode: "build",
+    });
+    env.repo.close();
+    env.repo = new TaskIndexRepo();
+    vi.mocked(env.agent.readPersistedTaskSearchPage).mockResolvedValue({
+      items: [
+        { sessionId: "cold-search", sourceRevision: "a".repeat(64), searchableText: "冷启动正文" },
+      ],
+      complete: true,
+    });
+    const syncer = createZCodeTaskIndexSyncer({ agentService: env.agent, taskIndexRepo: env.repo });
+    await expect(
+      env.repo.queryTaskList({
+        workspaceScopes: [{ workspacePath: "/repo" }],
+        search: "冷启动正文",
+      }),
+    ).rejects.toMatchObject({ code: "TASK_SEARCH_INDEX_NOT_READY" });
+
+    await syncer.ensureSearchReadyForExplicitQuery([{ workspacePath: "/repo" }]);
+
+    expect(env.agent.readPersistedTaskSearchPage).toHaveBeenCalledWith(
+      expect.objectContaining({ workspacePath: "/repo", runtimePolicy: "start-if-needed" }),
+    );
+    expect(env.agent.subscribeSessionsIndexV4).not.toHaveBeenCalled();
+    await expect(
+      env.repo.queryTaskList({
+        workspaceScopes: [{ workspacePath: "/repo" }],
+        search: "冷启动正文",
+      }),
+    ).resolves.toMatchObject({ total: 1 });
+    syncer.disposeAll();
+  });
+
+  it("并发显式搜索只枚举一次，分页失败后保持未就绪", async () => {
+    const env = setupEnv({ runtimeLifecycle: true });
+    let releasePage!: () => void;
+    const pageGate = new Promise<void>((resolve) => {
+      releasePage = resolve;
+    });
+    vi.mocked(env.agent.readPersistedTaskSearchPage).mockImplementation(async () => {
+      await pageGate;
+      throw new Error("persisted page unavailable");
+    });
+    const syncer = createZCodeTaskIndexSyncer({ agentService: env.agent, taskIndexRepo: env.repo });
+    const first = syncer.ensureSearchReadyForExplicitQuery([{ workspacePath: "/repo" }]);
+    const second = syncer.ensureSearchReadyForExplicitQuery([{ workspacePath: "/repo" }]);
+    await vi.waitFor(() => expect(env.agent.readPersistedTaskSearchPage).toHaveBeenCalledTimes(1));
+    releasePage();
+    await expect(first).rejects.toThrow("persisted page unavailable");
+    await expect(second).rejects.toThrow("persisted page unavailable");
+    await expect(
+      env.repo.queryTaskList({ workspaceScopes: [{ workspacePath: "/repo" }], search: "未知" }),
+    ).rejects.toMatchObject({ code: "TASK_SEARCH_INDEX_NOT_READY" });
+    vi.mocked(env.agent.readPersistedTaskSearchPage).mockResolvedValue({
+      items: [],
+      complete: true,
+    });
+    await syncer.ensureSearchReadyForExplicitQuery([{ workspacePath: "/repo" }]);
+    await expect(
+      env.repo.queryTaskList({ workspaceScopes: [{ workspacePath: "/repo" }], search: "未知" }),
+    ).resolves.toMatchObject({ total: 0 });
+    syncer.disposeAll();
+  });
+
+  it("按需启动 CLI 的 runtime available 不与初始 topic 并发重复分页", async () => {
+    const env = setupEnv({
+      runtimeLifecycle: true,
+      initialSessions: [summaryOf("cold-runtime", "completedSuccess", { title: "旧任务" })],
+    });
+    vi.mocked(env.agent.readPersistedTaskSearchPage).mockImplementation(async () => {
+      env.lifecycleEmitter.fire({
+        workspacePath: "/repo",
+        workspaceKey: "/repo",
+        runtimeIdentity: { generation: 1, identity: "/repo:1", workspaceKey: "/repo" },
+        state: "available",
+      });
+      return {
+        items: [
+          { sessionId: "cold-runtime", sourceRevision: "b".repeat(64), searchableText: "旧正文" },
+        ],
+        complete: true,
+      };
+    });
+    vi.mocked(env.agent.listSessions).mockResolvedValue([
+      {
+        sessionId: "cold-runtime",
+        workspace: { workspacePath: "/repo", workspaceKey: "/repo" },
+        sessionKind: "interactive",
+        title: "旧任务",
+        mode: "build",
+        status: "completed",
+        createdAt: 1,
+        updatedAt: 100,
+      },
+    ]);
+    const syncer = createZCodeTaskIndexSyncer({ agentService: env.agent, taskIndexRepo: env.repo });
+    await syncer.ensureSearchReadyForExplicitQuery([{ workspacePath: "/repo" }]);
+    await subscribed(env);
+    await expect(
+      env.repo.queryTaskList({ workspaceScopes: [{ workspacePath: "/repo" }], search: "旧正文" }),
+    ).resolves.toMatchObject({ total: 1 });
+    expect(env.agent.readPersistedTaskSearchPage).toHaveBeenCalledTimes(1);
+    syncer.disposeAll();
+  });
+
+  it("workspace 已就绪后出现 dormant 新会话，重新分页并补齐正文", async () => {
+    const env = setupEnv();
+    const syncer = createZCodeTaskIndexSyncer({
+      agentService: env.agent,
+      taskIndexRepo: env.repo,
+    });
+    syncer.ensureWorkspaceSubscription({ workspacePath: "/repo" });
+    await vi.waitFor(async () =>
+      expect(
+        await env.repo.queryTaskList({
+          workspaceScopes: [{ workspacePath: "/repo" }],
+          search: "尚无任务",
+        }),
+      ).toMatchObject({ total: 0 }),
+    );
+    vi.mocked(env.agent.readSession).mockRejectedValue(new Error("dormant runtime unavailable"));
+    vi.mocked(env.agent.readPersistedTaskSearchPage).mockResolvedValue({
+      items: [
+        { sessionId: "cold-new", sourceRevision: "b".repeat(64), searchableText: "冷历史正文" },
+      ],
+      complete: true,
+    });
+    vi.mocked(env.agent.listSessions).mockResolvedValue([
+      {
+        sessionId: "cold-new",
+        workspace: { workspacePath: "/repo", workspaceKey: "/repo" },
+        sessionKind: "interactive",
+        title: "冷历史",
+        mode: "build",
+        status: "completed",
+        createdAt: 1,
+        updatedAt: 100,
+      },
+    ]);
+    env.indexEmitter.fire(indexUpsertFrame(summaryOf("cold-new", "completedSuccess")));
+    await vi.waitFor(async () =>
+      expect(
+        await env.repo.queryTaskList({
+          workspaceScopes: [{ workspacePath: "/repo" }],
+          search: "冷历史正文",
+        }),
+      ).toMatchObject({ total: 1 }),
+    );
+    expect(env.agent.readPersistedTaskSearchPage).toHaveBeenCalledTimes(2);
+    syncer.disposeAll();
+  });
+
+  it("完成标记进行中收到新会话时仍重扫持久页", async () => {
+    const env = setupEnv();
+    const markComplete = env.repo.markSearchRebuildComplete.bind(env.repo);
+    let resumeComplete!: () => void;
+    const completionGate = new Promise<void>((resolve) => {
+      resumeComplete = resolve;
+    });
+    let markReached!: () => void;
+    const markReachedGate = new Promise<void>((resolve) => {
+      markReached = resolve;
+    });
+    vi.spyOn(env.repo, "markSearchRebuildComplete").mockImplementation(async (target) => {
+      await markComplete(target);
+      markReached();
+      await completionGate;
+    });
+    const syncer = createZCodeTaskIndexSyncer({
+      agentService: env.agent,
+      taskIndexRepo: env.repo,
+    });
+    syncer.ensureWorkspaceSubscription({ workspacePath: "/repo" });
+    await markReachedGate;
+    vi.mocked(env.agent.readSession).mockRejectedValue(new Error("dormant runtime unavailable"));
+    vi.mocked(env.agent.readPersistedTaskSearchPage).mockResolvedValue({
+      items: [
+        {
+          sessionId: "cold-during-completion",
+          sourceRevision: "c".repeat(64),
+          searchableText: "完成时新正文",
+        },
+      ],
+      complete: true,
+    });
+    vi.mocked(env.agent.listSessions).mockResolvedValue([
+      {
+        sessionId: "cold-during-completion",
+        workspace: { workspacePath: "/repo", workspaceKey: "/repo" },
+        sessionKind: "interactive",
+        title: "完成时新历史",
+        mode: "build",
+        status: "completed",
+        createdAt: 1,
+        updatedAt: 100,
+      },
+    ]);
+    env.indexEmitter.fire(
+      indexUpsertFrame(summaryOf("cold-during-completion", "completedSuccess")),
+    );
+    resumeComplete();
+    await vi.waitFor(() => expect(env.agent.readPersistedTaskSearchPage).toHaveBeenCalledTimes(2));
+    await vi.waitFor(async () =>
+      expect(
+        await env.repo.queryTaskList({
+          workspaceScopes: [{ workspacePath: "/repo" }],
+          search: "完成时新正文",
+        }),
+      ).toMatchObject({ total: 1 }),
+    );
+    syncer.disposeAll();
+  });
+
+  it("CLI 无对应行的旧 Claude 导入，从身份匹配的 legacy 快照重建", async () => {
+    const env = setupEnv();
+    const meta = await env.repo.seedTaskMetaIfMissing({
+      taskId: "legacy-claude",
+      traceId: "trace-legacy-claude",
+      title: "Claude 导入",
+      workspacePath: "/repo",
+      createdAt: 1,
+      updatedAt: 2,
+      mode: "default",
+      migrationSource: "claudeCode",
+    });
+    await writeImportedClaudeTaskSnapshot({
+      sessionFile: {
+        meta,
+        messages: [
+          {
+            role: "user",
+            content: '原文 ::next-prompt{label="用户字面量" prompt="保留"}',
+            timestamp: 1,
+          },
+          {
+            role: "assistant",
+            content: '**旧答复**\n\n::next-prompt{label="助手建议" prompt="继续"}',
+            timestamp: 2,
+          },
+        ],
+      },
+    });
+    vi.mocked(env.agent.readPersistedTaskSearchPage).mockResolvedValue({
+      items: [],
+      complete: true,
+    });
+    const syncer = createZCodeTaskIndexSyncer({
+      agentService: env.agent,
+      taskIndexRepo: env.repo,
+    });
+    syncer.ensureWorkspaceSubscription({ workspacePath: "/repo" });
+    await vi.waitFor(async () =>
+      expect(
+        await env.repo.queryTaskList({
+          workspaceScopes: [{ workspacePath: "/repo" }],
+          search: "旧答复",
+        }),
+      ).toMatchObject({ total: 1 }),
+    );
+    expect(
+      await env.repo.queryTaskList({
+        workspaceScopes: [{ workspacePath: "/repo" }],
+        search: "助手建议",
+      }),
+    ).toMatchObject({ total: 0 });
+    expect(
+      await env.repo.queryTaskList({
+        workspaceScopes: [{ workspacePath: "/repo" }],
+        search: "用户字面量",
+      }),
+    ).toMatchObject({ total: 1 });
+    syncer.disposeAll();
+  });
+
+  it("旧 Claude 快照身份不符时保留 pending，并拒绝完成搜索", async () => {
+    const env = setupEnv();
+    const meta = await env.repo.seedTaskMetaIfMissing({
+      taskId: "legacy-mismatch",
+      traceId: "trace-legacy-mismatch",
+      title: "Claude 导入",
+      workspacePath: "/repo",
+      createdAt: 1,
+      updatedAt: 2,
+      mode: "default",
+      migrationSource: "claudeCode",
+    });
+    await writeImportedClaudeTaskSnapshot({
+      sessionFile: { meta, messages: [{ role: "user", content: "原始正文", timestamp: 1 }] },
+    });
+    const path = getLegacyTaskSessionSnapshotPath("/repo", "legacy-mismatch");
+    const snapshot = JSON.parse(readFileSync(path, "utf8")) as { meta: { workspacePath: string } };
+    snapshot.meta.workspacePath = "/other";
+    writeFileSync(path, JSON.stringify(snapshot));
+    vi.mocked(env.agent.readPersistedTaskSearchPage).mockResolvedValue({
+      items: [],
+      complete: true,
+    });
+    const syncer = createZCodeTaskIndexSyncer({
+      agentService: env.agent,
+      taskIndexRepo: env.repo,
+    });
+    syncer.ensureWorkspaceSubscription({ workspacePath: "/repo" });
+    await vi.waitFor(() => expect(env.agent.readPersistedTaskSearchPage).toHaveBeenCalled());
+    await expect(
+      env.repo.queryTaskList({ workspaceScopes: [{ workspacePath: "/repo" }], search: "原始正文" }),
+    ).rejects.toMatchObject({ code: "TASK_SEARCH_INDEX_NOT_READY" });
+    expect(await env.repo.countPendingSearchRows({ workspacePath: "/repo" })).toBe(1);
+    syncer.disposeAll();
   });
 
   it("writes status: error on v4 phase running->error and fills lastError from resynced snapshot", async () => {
@@ -1577,6 +2027,7 @@ describe("createZCodeTaskIndexSyncer", () => {
       targetID: "goal_1",
     });
 
+    await env.repo.markSearchRebuildComplete({ workspacePath: "/repo" });
     const objectiveResult = await env.repo.queryTaskList({
       workspaceScopes: [{ workspacePath: "/repo" }],
       search: "60fps",

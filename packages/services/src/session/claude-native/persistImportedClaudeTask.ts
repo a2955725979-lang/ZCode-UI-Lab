@@ -1,6 +1,11 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { ZCodeSessionFile, ZCodeTaskMeta } from "@zcode/shared";
+import {
+  buildZCodeTaskSearchableText,
+  type ZCodeMessageWithParts,
+  type ZCodeSessionFile,
+  type ZCodeTaskMeta,
+} from "@zcode/shared";
 import { getLegacyTaskSessionSnapshotPath } from "#src/paths.js";
 import {
   parseLegacyTaskSessionFile,
@@ -8,25 +13,13 @@ import {
 } from "#src/session/legacyTaskSessionFile.js";
 import type { TaskIndexRepo } from "#src/session/taskIndexRepo.js";
 
-const TASK_SEARCH_TEXT_MAX_CHARS = 200_000;
-
 export function buildSearchableTextFromMessages(messages: ZCodeSessionFile["messages"]): string {
-  const parts: string[] = [];
-  let total = 0;
-  for (const message of messages) {
-    const content = message.content.trim();
-    if (!content) {
-      continue;
-    }
-    const next = total > 0 ? `\n${content}` : content;
-    if (total + next.length > TASK_SEARCH_TEXT_MAX_CHARS) {
-      parts.push(next.slice(0, TASK_SEARCH_TEXT_MAX_CHARS - total));
-      break;
-    }
-    parts.push(next);
-    total += next.length;
-  }
-  return parts.join("");
+  // legacy 导入只有 role/content；构造正文投影所需的最小形状，与实时及 CLI 回填共用规则。
+  const projected = messages.map((message) => ({
+    info: { role: message.role },
+    parts: [{ type: "text" as const, text: message.content }],
+  })) as unknown as ZCodeMessageWithParts[];
+  return buildZCodeTaskSearchableText(projected);
 }
 
 async function writeSessionFileAtomic(

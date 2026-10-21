@@ -74,6 +74,7 @@ import type {
   ZCodeSessionRequestRuntimePreferencesParams,
   ZCodeSessionRuntimePreferencesResult,
   ZCodeSessionStateSnapshot,
+  ZCodeTaskIndexReadPersistedSearchPageResult,
   ZCodeSessionSubagentsResult,
   ZCodeStateUpdatedNotification,
   ZCodeTaskClientMode,
@@ -174,6 +175,13 @@ import type {
 
 export interface ZCodeAgentSessionTarget extends ZCodeAgentWorkspaceTarget {
   sessionId: string;
+}
+
+export interface ZCodeAgentReadPersistedTaskSearchPageParams extends ZCodeAgentWorkspaceTarget {
+  cursor?: string;
+  limit: number;
+  /** 只有用户显式全文搜索可按需启动只读 CLI；普通索引摄入继续 existing-only。 */
+  runtimePolicy?: ZCodeAgentRuntimePolicy;
 }
 
 export interface ZCodeAgentResumeSessionParams extends ZCodeAgentSessionTarget {
@@ -642,6 +650,10 @@ export interface IZCodeAgentService {
   getAppUsageStats(params: ZCodeAgentAppUsageParams): Promise<AppUsageSnapshot>;
   getTaskTokenUsage(params: ZCodeAgentTaskTokenUsageParams): Promise<ZCodeTaskTokenUsageResult>;
   readSession(params: ZCodeAgentReadSessionParams): Promise<ZCodeSessionStateSnapshot>;
+  /** 只读持久 active branch 正文页；缺省不启动 runtime，显式搜索可请求按需启动。 */
+  readPersistedTaskSearchPage(
+    params: ZCodeAgentReadPersistedTaskSearchPageParams,
+  ): Promise<ZCodeTaskIndexReadPersistedSearchPageResult>;
   readSessionMessages(
     params: ZCodeAgentReadSessionMessagesParams,
   ): Promise<ZCodeMessageWithParts[]>;

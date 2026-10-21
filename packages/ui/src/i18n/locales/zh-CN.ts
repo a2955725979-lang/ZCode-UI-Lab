@@ -2198,6 +2198,8 @@ const zhCN: Record<string, string> = {
   "taskGroup.ungroupFailed": "取消分组失败",
   "taskGroup.updateFailed": "更新分组顺序失败",
   "taskSearch.loading": "正在搜索…",
+  "taskSearch.rebuilding": "对话搜索索引正在重建，结果暂不完整。",
+  "taskSearch.retry": "重试",
   "taskTimeline.today": "今天",
   "taskTimeline.yesterday": "昨天",
   "taskTimeline.daysAgo": "{days} 天前",

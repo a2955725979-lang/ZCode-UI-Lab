@@ -2341,6 +2341,8 @@ const enUS: Record<string, string> = {
   "taskGroup.ungroupFailed": "Could not ungroup tasks",
   "taskGroup.updateFailed": "Could not update group order",
   "taskSearch.loading": "Searching...",
+  "taskSearch.rebuilding": "Conversation search is rebuilding; results are not complete yet.",
+  "taskSearch.retry": "Retry",
   "taskTimeline.today": "Today",
   "taskTimeline.yesterday": "Yesterday",
   "taskTimeline.daysAgo": "{days} days ago",

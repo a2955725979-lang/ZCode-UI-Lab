@@ -383,6 +383,33 @@ describe("WindowHostControllerService", () => {
     expect(result).toEqual({ items: [], total: 0, hasMore: false });
   });
 
+  it("正文索引未就绪时把状态传给调用方，不伪装为空结果", async () => {
+    const local = taskService({});
+    const notReady = Object.assign(new Error("Task search index is rebuilding"), {
+      code: "TASK_SEARCH_INDEX_NOT_READY",
+    });
+    local.listTaskList = vi.fn(async () => {
+      throw notReady;
+    });
+    const runtime = createWindowHostControllerRuntime({
+      createId: () => "id",
+      resolveSource: (scope) => ({
+        scope: { kind: "local" as const, ...scope },
+        taskService: local,
+        sourceAvailability: "online" as const,
+      }),
+    });
+
+    await expect(
+      runtime.service.listTaskList({
+        kind: "active",
+        workspaceScopes: [{ workspacePath: "/work/demo" }],
+        sortBy: "updated",
+        search: "旧正文",
+      }),
+    ).rejects.toBe(notReady);
+  });
+
   it("列表 mutation 按完整 task address 路由到唯一 task service", async () => {
     const remote = taskService({
       active: [meta({ taskId: "remote", workspaceIdentity: remoteIdentity })],

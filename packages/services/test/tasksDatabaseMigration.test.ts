@@ -37,9 +37,35 @@ describe("DB109 App 库统一迁移", () => {
       "tasks_schema_migration",
     ]);
     const ledger = db.prepare("SELECT * FROM tasks_schema_migration").all();
-    expect(ledger).toHaveLength(3);
+    expect(ledger).toHaveLength(4);
     runTasksDatabaseMigrations(db);
     expect(db.prepare("SELECT * FROM tasks_schema_migration").all()).toEqual(ledger);
+  });
+
+  it("搜索索引迁移原子清除旧正文，保留任务壳状态", () => {
+    const db = open();
+    runTasksDatabaseMigrations(db);
+    db.prepare(`INSERT INTO tasks(workspace_key,workspace_path,task_id,title,mode,created_at,updated_at,pinned,archived,searchable_text,meta_json)
+      VALUES('/repo','/repo','old','手动标题','build',1,2,1,1,?,'{}')`).run(
+      '真实正文\n::next-prompt{label="泄漏" prompt="私有建议"}',
+    );
+    db.exec(`DELETE FROM tasks_schema_migration WHERE id='0004_task_search_text_v2';
+      ALTER TABLE tasks DROP COLUMN searchable_text_version;
+      ALTER TABLE tasks DROP COLUMN search_source_revision;`);
+    runTasksDatabaseMigrations(db);
+    expect(
+      db
+        .prepare(`SELECT title,pinned,archived,searchable_text,searchable_text_version,search_source_revision
+        FROM tasks WHERE task_id='old'`)
+        .get(),
+    ).toMatchObject({
+      title: "手动标题",
+      pinned: 1,
+      archived: 1,
+      searchable_text: "",
+      searchable_text_version: 0,
+      search_source_revision: null,
+    });
   });
 
   it("DB109-04/08：旧格式来源明确才转，原列/时间保留，不依赖账号", () => {
@@ -257,7 +283,7 @@ describe("DB109 App 库统一迁移", () => {
       Atomics.store(new Int32Array(gate), 0, 1);
       Atomics.notify(new Int32Array(gate), 0);
       expect(await Promise.all(exits)).toEqual([[0], [0]]);
-      expect(db.prepare("SELECT * FROM tasks_schema_migration").all()).toHaveLength(3);
+      expect(db.prepare("SELECT * FROM tasks_schema_migration").all()).toHaveLength(4);
       expect(db.prepare("SELECT * FROM migration_probe").all()).toHaveLength(1);
       expect(db.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
     } finally {

@@ -125,6 +125,7 @@ import {
   zcodeSessionRequestRuntimePreferencesParamsSchema,
   zcodeSessionRuntimePreferencesResultSchema,
   zcodeSessionStateSnapshotSchema,
+  zcodeTaskIndexReadPersistedSearchPageResultSchema,
   zcodeSessionSubscribeResultSchema,
   zcodeStateUpdatedNotificationSchema,
   zcodeUserInputRequestParamsSchema,
@@ -264,6 +265,7 @@ import type {
   ZCodeAgentConversationFileChangesParams,
   ZCodeAgentConversationFileRewindPreviewParams,
   ZCodeAgentConversationRowsRangeParams,
+  ZCodeAgentReadPersistedTaskSearchPageParams,
   ZCodeAgentConversationPlansParams,
   ZCodeAgentConversationWorkflowRunEventsParams,
   ZCodeAgentConversationWorkflowRunArtifactDataParams,
@@ -4069,6 +4071,22 @@ export function createZCodeAgentService(
       );
       rememberSessionTrace(params, snapshot);
       return snapshot;
+    },
+
+    async readPersistedTaskSearchPage(params: ZCodeAgentReadPersistedTaskSearchPageParams) {
+      const client = await getReadOnlyClient(params, params.runtimePolicy ?? "existing-only");
+      // 只读 CLI 持久库，不触发 provider 同步、session materialize 或模型回合。
+      // 仅显式全文搜索会传 start-if-needed；被动索引摄入仍为 existing-only。
+      return client.request(
+        zcodeProtocolMethods.taskIndexReadPersistedSearchPage,
+        {
+          workspacePath: params.workspacePath,
+          ...(params.workspaceIdentity ? { workspaceIdentity: params.workspaceIdentity } : {}),
+          ...(params.cursor ? { cursor: params.cursor } : {}),
+          limit: params.limit,
+        },
+        zcodeTaskIndexReadPersistedSearchPageResultSchema,
+      );
     },
 
     async readSessionMessages(params: ZCodeAgentReadSessionMessagesParams) {

@@ -122,4 +122,56 @@ describe("useGlobalTaskList remote connection generation", () => {
 
     unmount();
   });
+
+  it("搜索冷索引未就绪时不展示上一查询的陈旧结果，重试后恢复", async () => {
+    const controllerFrames = new Emitter<WindowHostControllerFrame>();
+    let rebuilding = false;
+    const listTaskList = vi.fn(async ({ search }: { search?: string }) => {
+      if (rebuilding)
+        throw Object.assign(new Error("rebuilding"), { code: "TASK_SEARCH_INDEX_NOT_READY" });
+      return { items: search ? [remoteTask()] : [], total: search ? 1 : 0, hasMore: false };
+    });
+    const controller = {
+      listTaskList,
+      onDynamicControllerFrame: vi.fn(() => controllerFrames.event),
+      subscribeControllerV4: vi.fn(async ({ topic }: { topic: string }) => ({
+        ack: { subscriptionId: topic, mode: "snapshot" as const, logEpoch: "epoch-1" },
+      })),
+      unsubscribeControllerV4: vi.fn(async () => undefined),
+      resyncControllerV4: vi.fn(),
+    } as unknown as IWindowControllerService;
+    const services = { windowControllerService: controller } as unknown as IServiceAccessor;
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(ServiceProvider, { services }, children);
+    const { result, rerender, unmount } = renderHook(
+      ({ searchQuery }: { searchQuery: string }) =>
+        useGlobalTaskList({
+          kind: "active",
+          workspaceTabs: [remoteTab(REMOTE_SESSION_ID)],
+          sortBy: "updated",
+          searchQuery,
+          expanded: true,
+          collapsedLimit: 100,
+        }),
+      { initialProps: { searchQuery: "原查询" }, wrapper },
+    );
+    await waitFor(() => expect(result.current.items).toHaveLength(1));
+
+    rebuilding = true;
+    rerender({ searchQuery: "新查询" });
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+      expect(result.current.searchIndexRebuilding).toBe(true);
+      expect(result.current.items).toEqual([]);
+      expect(result.current.total).toBe(0);
+    });
+
+    rebuilding = false;
+    await result.current.refresh();
+    await waitFor(() => {
+      expect(result.current.searchIndexRebuilding).toBe(false);
+      expect(result.current.items).toHaveLength(1);
+    });
+    unmount();
+  });
 });

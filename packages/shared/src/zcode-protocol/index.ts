@@ -3,6 +3,12 @@ import { zcodeProtocolTraceSchema } from "./trace.js";
 // Bot 反向回复的名字解析/待澄清结果与 App、CLI 使用同一严格 schema。
 export { channelReplyRequestSchema, channelReplyResultSchema } from "../channel-mention.js";
 export { zcodeProtocolTraceSchema, type ZCodeProtocolTrace } from "./trace.js";
+export {
+  zcodeTaskIndexReadPersistedSearchPageParamsSchema,
+  zcodeTaskIndexReadPersistedSearchPageResultSchema,
+  type ZCodeTaskIndexReadPersistedSearchPageParams,
+  type ZCodeTaskIndexReadPersistedSearchPageResult,
+} from "./persisted-task-search-page.js";
 import {
   databaseMigrationFactsSchema,
   databaseStartupErrorCodeSchema,
@@ -4077,6 +4083,7 @@ export const zcodeProtocolMethods = {
   sessionCreate: "session/create",
   sessionResume: "session/resume",
   sessionList: "session/list",
+  taskIndexReadPersistedSearchPage: "task-index/readPersistedSearchPage",
   sessionSubagents: "session/subagents",
   sessionRequestRuntimePreferences: "session/requestRuntimePreferences",
   subagentsReadRuntimeConfig: "subagents/readRuntimeConfig",

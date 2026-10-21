@@ -304,6 +304,7 @@ function createAgentMock() {
     listSessions: vi.fn(async () => {
       throw new Error("listSessions should not be used for task index lists");
     }),
+    readPersistedTaskSearchPage: vi.fn(async () => ({ items: [], complete: true })),
     getTaskTokenUsage: vi.fn(async (params) => ({
       sessionId: params.sessionId,
       totalTokens: 0,
@@ -356,7 +357,11 @@ function createAgentMock() {
         : {}),
     })),
     subscribeConversationV4: vi.fn(async () => ({
-      ack: { subscriptionId: "rename-cold-sub", mode: "snapshot" as const, logEpoch: "rename-epoch" },
+      ack: {
+        subscriptionId: "rename-cold-sub",
+        mode: "snapshot" as const,
+        logEpoch: "rename-epoch",
+      },
     })),
     unsubscribeConversationV4: vi.fn(async () => undefined),
     closeSession: vi.fn(async () => undefined),
@@ -2133,25 +2138,43 @@ describe("ZCode legacy task compat task index", () => {
     const { agent, service, taskIndexRepo } = createService();
     const workspaceIdentity = "remote:ssh:host:22:user:/repo";
     await seedIndexedTask(taskIndexRepo, {
-      taskId: "cold-rename", provider: "glm", workspacePath: "/repo", workspaceIdentity,
+      taskId: "cold-rename",
+      provider: "glm",
+      workspacePath: "/repo",
+      workspaceIdentity,
     });
     vi.mocked(agent.sendConversationCommandV4).mockResolvedValueOnce({
-      commandId: "first-rename", status: "rejected", reasonCode: "proto.sessionNotFound",
+      commandId: "first-rename",
+      status: "rejected",
+      reasonCode: "proto.sessionNotFound",
     });
     const renamed = await service.renameTask({
-      taskId: "cold-rename", workspacePath: "/repo", workspaceIdentity, title: "Renamed history",
+      taskId: "cold-rename",
+      workspacePath: "/repo",
+      workspaceIdentity,
+      title: "Renamed history",
     });
     expect(renamed.title).toBe("Renamed history");
     expect(agent.subscribeConversationV4).toHaveBeenCalledExactlyOnceWith({
-      workspacePath: "/repo", workspaceIdentity, sessionId: "cold-rename", visibility: "background",
+      workspacePath: "/repo",
+      workspaceIdentity,
+      sessionId: "cold-rename",
+      visibility: "background",
     });
     expect(agent.sendConversationCommandV4).toHaveBeenCalledTimes(2);
-    const attempts = vi.mocked(agent.sendConversationCommandV4).mock.calls.map(([params]) => params);
+    const attempts = vi
+      .mocked(agent.sendConversationCommandV4)
+      .mock.calls.map(([params]) => params);
     expect(attempts[0]?.envelope.commandId).not.toBe(attempts[1]?.envelope.commandId);
     for (const attempt of attempts) {
       expect(attempt).toMatchObject({
-        workspacePath: "/repo", workspaceIdentity,
-        envelope: { type: "renameSession", sessionId: "cold-rename", payload: { title: "Renamed history" } },
+        workspacePath: "/repo",
+        workspaceIdentity,
+        envelope: {
+          type: "renameSession",
+          sessionId: "cold-rename",
+          payload: { title: "Renamed history" },
+        },
       });
     }
     const sendOrder = vi.mocked(agent.sendConversationCommandV4).mock.invocationCallOrder;
@@ -2159,7 +2182,10 @@ describe("ZCode legacy task compat task index", () => {
     expect(sendOrder[0]).toBeLessThan(subscribeOrder);
     expect(sendOrder[1]).toBeGreaterThan(subscribeOrder);
     expect(agent.unsubscribeConversationV4).toHaveBeenCalledExactlyOnceWith({
-      workspacePath: "/repo", workspaceIdentity, sessionId: "cold-rename", subscriptionId: "rename-cold-sub",
+      workspacePath: "/repo",
+      workspaceIdentity,
+      sessionId: "cold-rename",
+      subscriptionId: "rename-cold-sub",
     });
     expect(agent.sendPrompt).not.toHaveBeenCalled();
     expect(agent.resumeSession).not.toHaveBeenCalled();
@@ -2167,11 +2193,21 @@ describe("ZCode legacy task compat task index", () => {
 
   it("does not recover or retry other rename rejections", async () => {
     const { agent, service, taskIndexRepo } = createService();
-    await seedIndexedTask(taskIndexRepo, { taskId: "rename-rejected", provider: "glm", workspacePath: "/repo" });
-    vi.mocked(agent.sendConversationCommandV4).mockResolvedValueOnce({
-      commandId: "rename-rejected", status: "rejected", reasonCode: "proto.invalidPayload",
+    await seedIndexedTask(taskIndexRepo, {
+      taskId: "rename-rejected",
+      provider: "glm",
+      workspacePath: "/repo",
     });
-    await service.renameTask({ taskId: "rename-rejected", workspacePath: "/repo", title: "Indexed fallback" });
+    vi.mocked(agent.sendConversationCommandV4).mockResolvedValueOnce({
+      commandId: "rename-rejected",
+      status: "rejected",
+      reasonCode: "proto.invalidPayload",
+    });
+    await service.renameTask({
+      taskId: "rename-rejected",
+      workspacePath: "/repo",
+      title: "Indexed fallback",
+    });
     expect(agent.sendConversationCommandV4).toHaveBeenCalledTimes(1);
     expect(agent.subscribeConversationV4).not.toHaveBeenCalled();
     expect(agent.unsubscribeConversationV4).not.toHaveBeenCalled();
@@ -2179,15 +2215,30 @@ describe("ZCode legacy task compat task index", () => {
 
   it("releases the cold rename subscription when the single retry fails", async () => {
     const { agent, service, taskIndexRepo } = createService();
-    await seedIndexedTask(taskIndexRepo, { taskId: "retry-fails", provider: "glm", workspacePath: "/repo" });
+    await seedIndexedTask(taskIndexRepo, {
+      taskId: "retry-fails",
+      provider: "glm",
+      workspacePath: "/repo",
+    });
     vi.mocked(agent.sendConversationCommandV4)
-      .mockResolvedValueOnce({ commandId: "missing", status: "rejected", reasonCode: "proto.sessionNotFound" })
+      .mockResolvedValueOnce({
+        commandId: "missing",
+        status: "rejected",
+        reasonCode: "proto.sessionNotFound",
+      })
       .mockRejectedValueOnce(new Error("Transport closed"));
-    const renamed = await service.renameTask({ taskId: "retry-fails", workspacePath: "/repo", title: "Indexed fallback" });
+    const renamed = await service.renameTask({
+      taskId: "retry-fails",
+      workspacePath: "/repo",
+      title: "Indexed fallback",
+    });
     expect(renamed.title).toBe("Indexed fallback");
     expect(agent.sendConversationCommandV4).toHaveBeenCalledTimes(2);
     expect(agent.unsubscribeConversationV4).toHaveBeenCalledExactlyOnceWith({
-      workspacePath: "/repo", workspaceIdentity: undefined, sessionId: "retry-fails", subscriptionId: "rename-cold-sub",
+      workspacePath: "/repo",
+      workspaceIdentity: undefined,
+      sessionId: "retry-fails",
+      subscriptionId: "rename-cold-sub",
     });
   });
 
@@ -3991,6 +4042,23 @@ describe("ZCode legacy task compat task index", () => {
     expect(pinnedIds).toEqual(["glm_pinned"]);
     expect(taskList.items.map((task) => task.taskId)).toEqual(["glm_active"]);
     expect(taskList.total).toBe(1);
+  });
+
+  it("全文搜索才按需建立持久索引，普通列表不启动冷 workspace", async () => {
+    const { service, agent } = createService();
+    const query = {
+      kind: "active" as const,
+      workspaceScopes: [{ workspacePath: "/repo" }],
+      sortBy: "updated" as const,
+    };
+    expect((await service.listTaskList(query)).total).toBe(0);
+    expect(agent.readPersistedTaskSearchPage).not.toHaveBeenCalled();
+
+    expect((await service.listTaskList({ ...query, search: "旧正文" })).total).toBe(0);
+    expect(agent.readPersistedTaskSearchPage).toHaveBeenCalledWith(
+      expect.objectContaining({ workspacePath: "/repo", runtimePolicy: "start-if-needed" }),
+    );
+    expect(agent.subscribeSessionsIndexV4).not.toHaveBeenCalled();
   });
 
   it("filters non-glm task rows from grouped order save results", async () => {

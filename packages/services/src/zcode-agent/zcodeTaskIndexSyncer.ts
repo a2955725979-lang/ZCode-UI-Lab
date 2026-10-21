@@ -1,9 +1,11 @@
 /* eslint-disable max-lines -- task index 的 v4 帧摄入、snapshot upsert 和 workspace 广播必须共享同一份闭包状态。 */
+import { createHash } from "node:crypto";
+import { lstat, readFile } from "node:fs/promises";
 import { repairSubagentTaskIndex } from "#src/zcode-agent/repairSubagentTaskIndex.js";
 import {
   deriveZCodeTaskStatusFromSessionSnapshot,
+  buildZCodeTaskSearchableText,
   generateTraceId,
-  getZCodeUserVisibleMessages,
   isZCodeGoalContinuationReminderText,
   isZCodeModelOnlySyntheticUserMessage,
   resolveWorkspaceKey,
@@ -13,9 +15,9 @@ import {
   type ZCodeTaskGoal,
   type ZCodeTaskMode,
   type ZCodeTaskMeta,
-  type ZCodeMessagePart,
   type ZCodeSessionMode,
   type ZCodeSessionStateSnapshot,
+  type ZCodeSessionInfo,
   type ZCodeWorkspaceEvent,
   type ZCodeWorkspaceTaskListChanged,
 } from "@zcode/shared";
@@ -37,10 +39,14 @@ import {
 } from "@zcode/shared/zcode-protocol-v4";
 import { Emitter, type Event, type IDisposable } from "@zcode/rpc";
 import { createServiceLogger } from "#src/logger/serviceLogger.js";
-import { TaskIndexRepo } from "#src/session/taskIndexRepo.js";
+import { TaskIndexRepo, TaskSearchIndexNotReadyError } from "#src/session/taskIndexRepo.js";
+import { getLegacyTaskSessionSnapshotPath } from "#src/paths.js";
+import { safeParseLegacyTaskSessionFile } from "#src/session/legacyTaskSessionFile.js";
+import { buildSearchableTextFromMessages } from "#src/session/claude-native/persistImportedClaudeTask.js";
 import type { ZCodeWorkspaceEventSubscriptionParams } from "#src/session/zcodeTaskListTypes.js";
 import type {
   IZCodeAgentService,
+  ZCodeAgentRuntimePolicy,
   ZCodeAgentSessionTarget,
   ZCodeAgentWorkspaceTarget,
 } from "./zcodeAgent.js";
@@ -92,6 +98,8 @@ export interface ZCodeTaskIndexReadyEvent {
 }
 
 export interface ZCodeTaskIndexSyncer {
+  /** 用户显式全文搜索时，对未打开的 workspace 单飞枚举持久正文；不启动模型回合。 */
+  ensureSearchReadyForExplicitQuery(targets: ZCodeAgentWorkspaceTarget[]): Promise<void>;
   /**
    * 幂等地为指定 workspace 建立 v4 后台摄入订阅（sessions-index + workspace-config），
    * 把 CLI 权威投影的会话终态/标题/配置目录落到 task index sqlite 与 workspace 广播。
@@ -269,6 +277,9 @@ interface WorkspaceIngestState {
   summaries: Map<string, SessionSummary>;
   /** 首帧（snapshot）静默补缺失行，但不回放历史终态事件或列表广播。 */
   seeded: boolean;
+  searchRebuildStatus: "pending" | "rebuilding" | "ready" | "failed";
+  searchRebuildPromise: Promise<void> | null;
+  searchRebuildRescanRequested: boolean;
   /** workspace 级 frame emitter 跨 runtime generation 保持稳定，只允许安装一组 listener。 */
   frameListenersInstalled: boolean;
   disposables: IDisposable[];
@@ -307,6 +318,7 @@ export function createZCodeTaskIndexSyncer(
   // workspace-config topic 提供配置目录热更新；正文搜索索引在 phase 终态迁移时
   // 回源完整 snapshot 收敛（v4 命令路径不再有 op 驱动的 snapshot 同步兜底）。
   const workspaceIngests = new Map<string, WorkspaceIngestState>();
+  const explicitSearchRebuilds = new Map<string, Promise<void>>();
   // 之前 workspaceEmitters 私有在 adapter 里，syncer 写完 sqlite 没有广播渠道，
   // UI 永远收不到 workspace_task_list_changed。把 emitter 上提到 syncer，adapter 改为转发，
   // 让 adapter 路径和 desktop-continuous 路径共用同一份订阅，事件不再分裂。
@@ -677,6 +689,10 @@ export function createZCodeTaskIndexSyncer(
     }
     const target = sessionTargetFrom(state.target, next.sessionId);
     const becameVisibleTask = previous === undefined || previous.phase === "draft";
+    if (becameVisibleTask) {
+      // 新会话也可能是断档后才浮现的冷历史；重扫持久页才能证明搜索覆盖完整。
+      requestPersistedSearchRebuild(state);
+    }
     // 终态迁移 = 基线里真实观察到非终态 → 终态。无基线的会话（冷恢复 hydration、
     // 断档降级后新出现的历史会话）不回放终态；活跃会话必先以 running/prewarming
     // 进入基线（gateway 每个事件都 fan-out），不会漏掉真实收口。
@@ -738,6 +754,271 @@ export function createZCodeTaskIndexSyncer(
         firstError,
       );
     }
+  }
+
+  function baselineMetaFromPersistedSession(
+    target: ZCodeAgentWorkspaceTarget,
+    session: ZCodeSessionInfo,
+  ): ZCodeTaskMeta {
+    if (resolveWorkspaceKey(session.workspace) !== resolveWorkspaceKey(target)) {
+      throw new Error("持久搜索元数据 workspace identity 不匹配");
+    }
+    if (session.sessionKind === "subagent_child") {
+      throw new Error("持久搜索页包含子代理会话");
+    }
+    return {
+      taskId: session.sessionId,
+      traceId: session.traceId ?? generateTraceId(session.sessionId),
+      title: session.title,
+      ...(session.titleSource === "custom" ? { titleOverridden: true } : {}),
+      workspacePath: target.workspacePath,
+      workspaceIdentity: target.workspaceIdentity,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      mode: fromZCodeMode(session.mode),
+      provider: ZCODE_AGENT_PROVIDER,
+      ...(session.parentSessionId ? { forkedFromTaskId: session.parentSessionId } : {}),
+      ...(session.status === "completed"
+        ? { status: "completed" as const }
+        : session.status === "error"
+          ? { status: "error" as const }
+          : session.status === "running" || session.status === "waiting"
+            ? { status: "running" as const }
+            : {}),
+    };
+  }
+
+  async function rebuildPersistedSearchText(options: {
+    target: ZCodeAgentWorkspaceTarget;
+    runtimePolicy: ZCodeAgentRuntimePolicy;
+    isCurrent: () => boolean;
+    rescanRequested: () => boolean;
+  }): Promise<boolean> {
+    const { target, runtimePolicy, isCurrent, rescanRequested } = options;
+    let cursor: string | undefined;
+    const seenCursors = new Set<string>();
+    let pageCount = 0;
+    while (isCurrent()) {
+      const page = await agentService.readPersistedTaskSearchPage({
+        ...target,
+        ...(cursor ? { cursor } : {}),
+        limit: INITIAL_BASELINE_SEED_BATCH_SIZE,
+        ...(runtimePolicy === "start-if-needed" ? { runtimePolicy } : {}),
+      });
+      pageCount += 1;
+      const missing = new Set<string>();
+      for (const item of page.items) {
+        const result = await taskIndexRepo.applyRebuiltSearchableText({
+          ...target,
+          taskId: item.sessionId,
+          sourceRevision: item.sourceRevision,
+          searchableText: item.searchableText,
+        });
+        if (result === "missing") missing.add(item.sessionId);
+      }
+      if (missing.size > 0) {
+        // sessions-index 的默认列表可能只含最近一窗；按 ID 回源只读元数据补齐冷任务。
+        const sessions = await agentService.listSessions({
+          ...target,
+          sessionIds: [...missing],
+          includeArchived: true,
+          limit: INITIAL_BASELINE_SEED_BATCH_SIZE,
+          runtimePolicy,
+        });
+        const sessionById = new Map(sessions.map((session) => [session.sessionId, session]));
+        for (const item of page.items) {
+          if (!missing.has(item.sessionId)) continue;
+          const session = sessionById.get(item.sessionId);
+          if (!session) throw new Error("持久搜索正文缺少对应会话元数据");
+          await taskIndexRepo.seedTaskMetaIfMissing(
+            baselineMetaFromPersistedSession(target, session),
+            {
+              archived: session.archivedAt !== undefined,
+            },
+          );
+          const result = await taskIndexRepo.applyRebuiltSearchableText({
+            ...target,
+            taskId: item.sessionId,
+            sourceRevision: item.sourceRevision,
+            searchableText: item.searchableText,
+          });
+          if (result === "missing") throw new Error("持久搜索任务行补齐后仍不存在");
+        }
+      }
+      if (page.complete) {
+        if (page.nextCursor) throw new Error("持久搜索完成页不应继续携带游标");
+        if (!isCurrent() || rescanRequested()) return false;
+        await rebuildLegacyClaudeSearchText(target);
+        if (!isCurrent() || rescanRequested()) return false;
+        await taskIndexRepo.markSearchRebuildComplete(target);
+        if (!isCurrent() || rescanRequested()) {
+          // 完成标记异步等待期间可能出现新会话；撤回这次 ready，交给 finally 重扫。
+          taskIndexRepo.beginSearchRebuild(target);
+          return false;
+        }
+        logger.info(
+          undefined,
+          `持久任务搜索正文重建完成 workspace=${resolveWorkspaceKey(target)} pages=${pageCount}`,
+        );
+        return true;
+      }
+      if (!page.nextCursor || page.nextCursor === cursor || seenCursors.has(page.nextCursor)) {
+        throw new Error("持久搜索分页游标未前进");
+      }
+      seenCursors.add(page.nextCursor);
+      cursor = page.nextCursor;
+    }
+    return false;
+  }
+
+  async function rebuildLegacyClaudeSearchText(target: ZCodeAgentWorkspaceTarget): Promise<void> {
+    while (true) {
+      const pending = await taskIndexRepo.listPendingSearchRows({
+        ...target,
+        limit: INITIAL_BASELINE_SEED_BATCH_SIZE,
+      });
+      if (pending.length === 0) return;
+      for (const row of pending) {
+        if (row.migrationSource !== "claudeCode") {
+          throw new Error("持久搜索仍有无法从 CLI 回源的任务");
+        }
+        if (!/^[A-Za-z0-9_-]+$/u.test(row.taskId)) {
+          throw new Error("旧 Claude taskId 不符合安全文件名约束");
+        }
+        const path = getLegacyTaskSessionSnapshotPath(
+          target.workspacePath,
+          row.taskId,
+          target.workspaceIdentity,
+        );
+        const stat = await lstat(path);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024 * 1024) {
+          throw new Error("旧 Claude 快照不是可安全读取的本地文件");
+        }
+        const source = await readFile(path, "utf8");
+        const parsed = safeParseLegacyTaskSessionFile(JSON.parse(source) as unknown);
+        if (
+          !parsed.success ||
+          parsed.data.meta.migrationSource !== "claudeCode" ||
+          parsed.data.meta.taskId !== row.taskId ||
+          parsed.data.meta.workspacePath !== target.workspacePath ||
+          (parsed.data.meta.workspaceIdentity ?? null) !== (target.workspaceIdentity ?? null)
+        ) {
+          throw new Error("旧 Claude 快照身份与索引行不匹配");
+        }
+        const result = await taskIndexRepo.applyRebuiltSearchableText({
+          ...target,
+          taskId: row.taskId,
+          sourceRevision: createHash("sha256").update(source).digest("hex"),
+          searchableText: buildSearchableTextFromMessages(parsed.data.messages),
+        });
+        if (result === "missing") throw new Error("旧 Claude task index 行已消失");
+      }
+    }
+  }
+
+  function schedulePersistedSearchRebuild(
+    state: WorkspaceIngestState,
+    afterSeed?: Promise<void>,
+  ): void {
+    if (state.searchRebuildStatus === "ready" || state.searchRebuildPromise) return;
+    // 显式搜索正在枚举同一 workspace 时，topic 初始基线不并发跑第二份冷分页。
+    if (explicitSearchRebuilds.has(resolveWorkspaceKey(state.target))) return;
+    taskIndexRepo.beginSearchRebuild(state.target);
+    state.searchRebuildStatus = "rebuilding";
+    const promise = (async () => {
+      await afterSeed;
+      if (!isLiveState(state)) return;
+      const generation = state.indexSubscriptionGeneration;
+      if (
+        await rebuildPersistedSearchText({
+          target: state.target,
+          runtimePolicy: "existing-only",
+          isCurrent: () => isLiveState(state) && state.indexSubscriptionGeneration === generation,
+          rescanRequested: () => state.searchRebuildRescanRequested,
+        })
+      ) {
+        state.searchRebuildStatus = "ready";
+      }
+    })();
+    state.searchRebuildPromise = promise;
+    void promise
+      .catch((error) => {
+        if (!isLiveState(state)) return;
+        state.searchRebuildStatus = "failed";
+        logger.warn(
+          undefined,
+          `持久任务搜索正文重建失败 workspace=${resolveWorkspaceKey(state.target)}`,
+          error,
+        );
+      })
+      .finally(() => {
+        if (state.searchRebuildPromise !== promise) return;
+        state.searchRebuildPromise = null;
+        if (state.searchRebuildRescanRequested && isLiveState(state)) {
+          state.searchRebuildRescanRequested = false;
+          schedulePersistedSearchRebuild(state);
+        }
+      });
+  }
+
+  function requestPersistedSearchRebuild(state: WorkspaceIngestState): void {
+    taskIndexRepo.beginSearchRebuild(state.target);
+    state.searchRebuildStatus = "pending";
+    if (
+      state.searchRebuildPromise ||
+      explicitSearchRebuilds.has(resolveWorkspaceKey(state.target))
+    ) {
+      state.searchRebuildRescanRequested = true;
+      return;
+    }
+    schedulePersistedSearchRebuild(state);
+  }
+
+  async function ensureSearchReadyForExplicitQuery(
+    targets: ZCodeAgentWorkspaceTarget[],
+  ): Promise<void> {
+    const uniqueTargets = new Map(targets.map((target) => [resolveWorkspaceKey(target), target]));
+    await Promise.all(
+      [...uniqueTargets].map(async ([key, target]) => {
+        if (disposed) throw new TaskSearchIndexNotReadyError();
+        if (await taskIndexRepo.isSearchReadyForScope(target)) return;
+        const current = explicitSearchRebuilds.get(key);
+        if (current) return current;
+
+        // 显式搜索是唯一允许拉起 dormant CLI 的入口。微任务延后开始，先登记单飞
+        // promise，防止 runtime available 的同步事件并发启动第二份被动重建。
+        const lease = { active: true };
+        const promise = Promise.resolve().then(async () => {
+          const state = workspaceIngests.get(key);
+          if (state?.searchRebuildPromise) {
+            await state.searchRebuildPromise.catch(() => undefined);
+            if (await taskIndexRepo.isSearchReadyForScope(target)) return;
+          }
+          taskIndexRepo.beginSearchRebuild(target);
+          const ready = await rebuildPersistedSearchText({
+            target,
+            runtimePolicy: "start-if-needed",
+            isCurrent: () => lease.active && !disposed,
+            rescanRequested: () => workspaceIngests.get(key)?.searchRebuildRescanRequested ?? false,
+          });
+          if (!ready) throw new TaskSearchIndexNotReadyError();
+          const liveState = workspaceIngests.get(key);
+          if (liveState && isLiveState(liveState)) liveState.searchRebuildStatus = "ready";
+        });
+        explicitSearchRebuilds.set(key, promise);
+        try {
+          await promise;
+        } finally {
+          lease.active = false;
+          if (explicitSearchRebuilds.get(key) === promise) explicitSearchRebuilds.delete(key);
+          const state = workspaceIngests.get(key);
+          if (state?.searchRebuildRescanRequested && isLiveState(state)) {
+            state.searchRebuildRescanRequested = false;
+            schedulePersistedSearchRebuild(state);
+          }
+        }
+      }),
+    );
   }
 
   function deliveryKindOf(event: unknown): TopicDeliveryKind {
@@ -1022,7 +1303,8 @@ export function createZCodeTaskIndexSyncer(
         // 防止远端/新安装的空 sqlite 因纯 V4 路径永远没有存量。
         state.summaries = nextSummaries;
         state.seeded = true;
-        void seedMissingRowsFromInitialSnapshot(state, nextSummaries.values());
+        const seed = seedMissingRowsFromInitialSnapshot(state, nextSummaries.values());
+        schedulePersistedSearchRebuild(state, seed);
         const generation = state.indexSubscriptionGeneration;
         void repairSubagentTaskIndex({
           target: state.target,
@@ -1048,6 +1330,7 @@ export function createZCodeTaskIndexSyncer(
       for (const summary of nextSummaries.values()) {
         processSummary(state, previousSummaries.get(summary.sessionId), summary, deliveryKind);
       }
+      schedulePersistedSearchRebuild(state);
       completeIndexRecoveryFrame(state, deliveryKind);
       return;
     }
@@ -1543,6 +1826,10 @@ export function createZCodeTaskIndexSyncer(
     ensureWorkspaceFrameListeners(state);
     // 以前两个 topic 共用 Promise.all 代际，一侧暂态失败会
     // 撤销另一侧已成功的新订阅。现在各自 fresh subscribe + 退避重试。
+    state.searchRebuildStatus = "pending";
+    state.searchRebuildPromise = null;
+    state.searchRebuildRescanRequested = false;
+    taskIndexRepo.beginSearchRebuild(state.target);
     void subscribeIndexTopic(state, "runtime-restart", false);
     void subscribeConfigTopic(state, "runtime-restart", false);
   }
@@ -1649,6 +1936,9 @@ export function createZCodeTaskIndexSyncer(
       configLastWarnAt: null,
       summaries: new Map(),
       seeded: false,
+      searchRebuildStatus: "pending",
+      searchRebuildPromise: null,
+      searchRebuildRescanRequested: false,
       frameListenersInstalled: false,
       disposables: [],
       indexAssembler: new TopicWireFrameAssembler(sessionsIndexTopicFrameSchema),
@@ -1679,7 +1969,9 @@ export function createZCodeTaskIndexSyncer(
     if (snapshot.session.sessionKind === "subagent_child") return meta;
     // 同时把 snapshot.messages 里可见的聊天正文索引下去，
     // 让 TaskSearchDialog 正文搜索能命中；旧 sqlite 行下次到这里时自然回填。
-    const searchableText = buildSearchableTextFromSnapshot(snapshot);
+    const searchableText = buildZCodeTaskSearchableText(snapshot.messages, {
+      target: snapshot.projection.target,
+    });
     // desktop-continuous 首发若先提交 task row、再补 grouped sort_order，
     // sessions-index 会在两次写之间把缺序 task 暴露给 Renderer，产生先到底部再回顶部的跳动。
     const { meta: persisted, initializedGroupedOrder } = options?.moveGroupedTaskToTop
@@ -1748,6 +2040,7 @@ export function createZCodeTaskIndexSyncer(
   }
 
   return {
+    ensureSearchReadyForExplicitQuery,
     ensureWorkspaceSubscription,
 
     ensureSessionSubscription(
@@ -1896,45 +2189,6 @@ function hasUserVisibleContent(snapshot: ZCodeSessionStateSnapshot): boolean {
     if (isZCodeModelOnlySyntheticUserMessage(message)) return false;
     return message.parts.some((part) => part.type === "text" && part.text.trim().length > 0);
   });
-}
-
-const TASK_SEARCH_TEXT_MAX_CHARS = 200_000;
-
-// 全局会话搜索只索引默认可见的聊天正文，不包含思考过程、tool 调用和 compaction 折叠区。
-// assistant 的 parts 可能既有历史正文又有 latest 正文，这里只取最后一段 text part，
-// 与 UI 默认折叠后展示的范围一致。
-function buildSearchableTextFromSnapshot(snapshot: ZCodeSessionStateSnapshot): string {
-  const parts: string[] = [];
-  let total = 0;
-  // /goal 自动续跑会把内部 system-reminder 作为 runtime user turn 持久化；
-  // 这条内容是 model-only 输入，不是用户可见 query，不能写进侧边栏搜索正文。
-  for (const message of getZCodeUserVisibleMessages(snapshot.messages, {
-    target: snapshot.projection.target,
-  })) {
-    const textParts = message.parts.filter(
-      (part): part is Extract<ZCodeMessagePart, { type: "text" }> => part.type === "text",
-    );
-    if (textParts.length === 0) {
-      continue;
-    }
-    const chosen = message.info.role === "assistant" ? textParts.slice(-1) : textParts;
-    for (const part of chosen) {
-      const content = part.text.trim();
-      if (!content) {
-        continue;
-      }
-      parts.push(content);
-      total += content.length;
-      if (total >= TASK_SEARCH_TEXT_MAX_CHARS) {
-        break;
-      }
-    }
-    if (total >= TASK_SEARCH_TEXT_MAX_CHARS) {
-      break;
-    }
-  }
-  // 关键业务逻辑：上限截断，避免长任务把 tasks-index.sqlite 放大到影响启动和列表查询。
-  return parts.join("\n").slice(0, TASK_SEARCH_TEXT_MAX_CHARS);
 }
 
 function fromZCodeMode(mode: ZCodeSessionMode): ZCodeTaskMode {

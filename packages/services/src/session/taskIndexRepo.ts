@@ -41,6 +41,16 @@ import { runTasksDatabaseMigrations } from "#src/session/tasksDatabase/migration
 
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
+const TASK_SEARCH_TEXT_VERSION = 2;
+
+export class TaskSearchIndexNotReadyError extends Error {
+  readonly code = "TASK_SEARCH_INDEX_NOT_READY";
+
+  constructor() {
+    super("Task search index is rebuilding");
+    this.name = "TaskSearchIndexNotReadyError";
+  }
+}
 
 function appendZCodeAgentIndexedProviderFilter(
   where: string[],
@@ -77,6 +87,8 @@ interface TaskIndexRow {
   deleted: number;
   title_overridden: number;
   searchable_text: string;
+  searchable_text_version: number;
+  search_source_revision: string | null;
   meta_json: string;
 }
 
@@ -540,6 +552,9 @@ export class TaskIndexRepo {
   private dbPath: string | null = null;
   private initializePromise: Promise<void> | null = null;
   private readonly writeChains = new Map<string, Promise<void>>();
+  // 完整枚举属于当前 Host 的只读事实；重启后必须重新确认，不能沿用旧进程的空搜索结论。
+  private readonly searchReadyWorkspaceKeys = new Set<string>();
+  private readonly searchEnumeratedWorkspaceKeys = new Set<string>();
 
   async ensureReady(): Promise<void> {
     const path = this.startupDbPath ?? getTasksIndexDatabasePath();
@@ -557,6 +572,8 @@ export class TaskIndexRepo {
   }
 
   close(options?: { throwOnError?: boolean }): void {
+    this.searchReadyWorkspaceKeys.clear();
+    this.searchEnumeratedWorkspaceKeys.clear();
     let closeError: unknown;
     try {
       this.db?.close();
@@ -1064,6 +1081,8 @@ export class TaskIndexRepo {
           deleted,
           title_overridden,
           searchable_text,
+          searchable_text_version,
+          search_source_revision,
           meta_json
         FROM tasks
         WHERE workspace_key = ? AND task_id = ?`,
@@ -1509,6 +1528,12 @@ export class TaskIndexRepo {
       record.searchableText !== undefined
         ? record.searchableText.slice(0, TASK_SEARCH_TEXT_MAX_CHARS)
         : (existing?.searchable_text ?? "");
+    const searchableTextVersion =
+      record.searchableText !== undefined
+        ? TASK_SEARCH_TEXT_VERSION
+        : (existing?.searchable_text_version ?? 0);
+    const searchSourceRevision =
+      record.searchableText !== undefined ? null : (existing?.search_source_revision ?? null);
     this.getDatabase()
       .prepare(
         `INSERT INTO tasks (
@@ -1534,6 +1559,8 @@ export class TaskIndexRepo {
           deleted,
           title_overridden,
           searchable_text,
+          searchable_text_version,
+          search_source_revision,
           meta_json
         ) VALUES (
           @workspace_key,
@@ -1558,6 +1585,8 @@ export class TaskIndexRepo {
           @deleted,
           @title_overridden,
           @searchable_text,
+          @searchable_text_version,
+          @search_source_revision,
           @meta_json
         )
         ON CONFLICT(workspace_key, task_id) DO UPDATE SET
@@ -1588,6 +1617,8 @@ export class TaskIndexRepo {
           deleted = excluded.deleted,
           title_overridden = excluded.title_overridden,
           searchable_text = excluded.searchable_text,
+          searchable_text_version = excluded.searchable_text_version,
+          search_source_revision = excluded.search_source_revision,
           meta_json = excluded.meta_json`,
       )
       .run({
@@ -1616,13 +1647,31 @@ export class TaskIndexRepo {
         deleted: record.deleted ? 1 : 0,
         title_overridden: record.titleOverridden ? 1 : 0,
         searchable_text: searchableText,
+        searchable_text_version: searchableTextVersion,
+        search_source_revision: searchSourceRevision,
         meta_json: serializeMetaJson(record.meta),
       });
     const persisted = this.getTaskRow(record.meta);
     if (!persisted) {
       throw new Error(`task index 写入后缺少 task: ${record.meta.taskId}`);
     }
+    if (record.searchableText !== undefined) {
+      this.refreshSearchReadyAfterCurrentWrite(workspaceKey(record.meta));
+    } else if (!existing) {
+      // 首次只落元数据的行仍缺正文；即使此前空 workspace 已完成枚举，也要撤销就绪。
+      this.searchReadyWorkspaceKeys.delete(workspaceKey(record.meta));
+    }
     return rowToMeta(persisted);
+  }
+
+  private refreshSearchReadyAfterCurrentWrite(key: string): void {
+    if (!this.searchEnumeratedWorkspaceKeys.has(key)) return;
+    const pending = this.getDatabase()
+      .prepare(
+        "SELECT 1 FROM tasks WHERE workspace_key=? AND deleted=0 AND searchable_text_version<? LIMIT 1",
+      )
+      .get(key, TASK_SEARCH_TEXT_VERSION);
+    if (!pending) this.searchReadyWorkspaceKeys.add(key);
   }
 
   async syncTaskMeta(params: {
@@ -1824,21 +1873,122 @@ export class TaskIndexRepo {
    * 订阅。首次 snapshot 必须能补齐全新的 tasks-index.sqlite，但不能用摘要默认值
    * 覆盖已有的 pin/archive/unread/手动标题，也不能与随后到达的完整 snapshot 竞态回写。
    */
-  async seedTaskMetaIfMissing(meta: ZCodeTaskMeta): Promise<ZCodeTaskMeta> {
+  async seedTaskMetaIfMissing(
+    meta: ZCodeTaskMeta,
+    options: { archived?: boolean } = {},
+  ): Promise<ZCodeTaskMeta> {
     await this.ensureReady();
     return this.enqueueWrite(meta, () => {
       const existing = this.getTaskRow(meta);
       if (existing) {
         return rowToMeta(existing);
       }
+      this.searchReadyWorkspaceKeys.delete(workspaceKey(meta));
       return this.writeRecord({
         meta,
         pinned: false,
-        archived: false,
+        archived: options.archived ?? false,
         deleted: false,
         titleOverridden: meta.titleOverridden ?? false,
       });
     });
+  }
+
+  beginSearchRebuild(params: { workspacePath: string; workspaceIdentity?: string }): void {
+    const key = workspaceKey(params);
+    this.searchReadyWorkspaceKeys.delete(key);
+    this.searchEnumeratedWorkspaceKeys.delete(key);
+  }
+
+  /** 调用方只有在 CLI 全量分页显式 complete 后才能确认；本地待重建行仍须为零。 */
+  async markSearchRebuildComplete(params: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+  }): Promise<void> {
+    const pending = await this.countPendingSearchRows(params);
+    if (pending > 0) throw new TaskSearchIndexNotReadyError();
+    const key = workspaceKey(params);
+    this.searchEnumeratedWorkspaceKeys.add(key);
+    this.searchReadyWorkspaceKeys.add(key);
+  }
+
+  /** 查询前的轻量就绪检查；重启会清空内存证明，必须重新枚举持久会话。 */
+  async isSearchReadyForScope(params: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+  }): Promise<boolean> {
+    await this.ensureReady();
+    return (
+      this.searchReadyWorkspaceKeys.has(workspaceKey(params)) &&
+      (await this.countPendingSearchRows(params)) === 0
+    );
+  }
+
+  /** 冷历史只填未建索引行；同一 task 的实时快照先写入时，由 SQLite 条件更新保全新正文。 */
+  async applyRebuiltSearchableText(params: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+    taskId: string;
+    sourceRevision: string;
+    searchableText: string;
+  }): Promise<"applied" | "already-current" | "missing" | "deleted"> {
+    if (!params.sourceRevision.trim()) throw new Error("search sourceRevision is required");
+    await this.ensureReady();
+    return this.enqueueWrite(params, () => {
+      const result = this.getDatabase()
+        .prepare(
+          `UPDATE tasks SET searchable_text=?, searchable_text_version=?, search_source_revision=?
+            WHERE workspace_key=? AND task_id=? AND deleted=0 AND searchable_text_version<?`,
+        )
+        .run(
+          params.searchableText.slice(0, TASK_SEARCH_TEXT_MAX_CHARS),
+          TASK_SEARCH_TEXT_VERSION,
+          params.sourceRevision,
+          workspaceKey(params),
+          params.taskId,
+          TASK_SEARCH_TEXT_VERSION,
+        );
+      if (result.changes > 0) {
+        this.refreshSearchReadyAfterCurrentWrite(workspaceKey(params));
+        return "applied";
+      }
+      const current = this.getTaskRow(params);
+      if (!current) return "missing";
+      return current.deleted ? "deleted" : "already-current";
+    });
+  }
+
+  async countPendingSearchRows(params: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+  }): Promise<number> {
+    await this.ensureReady();
+    const row = this.getDatabase()
+      .prepare(
+        `SELECT COUNT(1) AS total FROM tasks
+          WHERE workspace_key=? AND deleted=0 AND searchable_text_version<?`,
+      )
+      .get(workspaceKey(params), TASK_SEARCH_TEXT_VERSION) as { total: number };
+    return row.total;
+  }
+
+  async listPendingSearchRows(params: {
+    workspacePath: string;
+    workspaceIdentity?: string;
+    limit: number;
+  }): Promise<Array<{ taskId: string; migrationSource: string | null }>> {
+    await this.ensureReady();
+    const rows = this.getDatabase()
+      .prepare(
+        `SELECT task_id, migration_source FROM tasks
+          WHERE workspace_key=? AND deleted=0 AND searchable_text_version<?
+          ORDER BY task_id LIMIT ?`,
+      )
+      .all(workspaceKey(params), TASK_SEARCH_TEXT_VERSION, params.limit) as Array<{
+      task_id: string;
+      migration_source: string | null;
+    }>;
+    return rows.map((row) => ({ taskId: row.task_id, migrationSource: row.migration_source }));
   }
 
   async clearTaskUnreadIfMatches(params: {
@@ -2179,13 +2329,27 @@ export class TaskIndexRepo {
       where.push("pinned = 0", "archived = 0");
     }
     if (normalizedSearchLike) {
+      if (workspaceKeys.some((key) => !this.searchReadyWorkspaceKeys.has(key))) {
+        throw new TaskSearchIndexNotReadyError();
+      }
+      const pending = this.getDatabase()
+        .prepare(
+          `SELECT 1 FROM tasks WHERE deleted=0 AND workspace_key IN (${workspaceKeys.map(() => "?").join(", ")}) AND searchable_text_version<? LIMIT 1`,
+        )
+        .get(...workspaceKeys, TASK_SEARCH_TEXT_VERSION);
+      // 旧索引或尚未回源的任务存在时，不能把不完整的结果（尤其空结果）报告为已搜完。
+      if (pending) throw new TaskSearchIndexNotReadyError();
+    }
+    if (normalizedSearchLike) {
       // 之前只按 title 模糊匹配，没有命中聊天正文；TaskSearchDialog 长期搜不到内容。
       // 现在 title 或 searchable_text 任一命中即视为匹配，正文摘要在结果阶段构建。
-      where.push("(LOWER(title) LIKE ? OR LOWER(searchable_text) LIKE ?)");
+      where.push(
+        "(LOWER(title) LIKE ? OR (searchable_text_version = ? AND LOWER(searchable_text) LIKE ?))",
+      );
     }
 
     if (normalizedSearchLike) {
-      args.push(normalizedSearchLike, normalizedSearchLike);
+      args.push(normalizedSearchLike, TASK_SEARCH_TEXT_VERSION, normalizedSearchLike);
     }
     const whereClause = where.join(" AND ");
     const totalRow = this.getDatabase()
@@ -2225,7 +2389,8 @@ export class TaskIndexRepo {
           archived,
           deleted,
           title_overridden,
-          searchable_text,
+          CASE WHEN searchable_text_version = ${TASK_SEARCH_TEXT_VERSION}
+            THEN searchable_text ELSE '' END AS searchable_text,
           meta_json
         FROM tasks
         WHERE ${whereClause}

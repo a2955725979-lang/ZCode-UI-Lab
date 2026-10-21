@@ -40,6 +40,11 @@ const indexes = `
 const terminalStatuses = "'completed','failed','cancelled'";
 const activePredicate = `session_id IS NOT NULL AND status NOT IN (${terminalStatuses})`;
 const boundIndex = `CREATE UNIQUE INDEX IF NOT EXISTS idx_off_peak_bound_active ON off_peak_tasks(workspace_key,session_id) WHERE ${activePredicate}`;
+const taskSearchTextV2 = [
+  "searchable_text_version INTEGER NOT NULL DEFAULT 0",
+  "search_source_revision TEXT",
+  "UPDATE tasks SET searchable_text='', searchable_text_version=0, search_source_revision=NULL",
+] as const;
 
 // 与 Agent 同样是库级串行事务，但不跨域依赖其具体 adapter。TS 转换使用冻结语义版本，
 // 禁用 function.toString 哈希：Electron/SEA 打包会改变函数文本而非迁移语义。
@@ -63,6 +68,10 @@ const definitions = [
   {
     id: "0003_official_glm_selection",
     checksumInput: [OFFICIAL_GLM_SELECTION_MIGRATION_SQL],
+  },
+  {
+    id: "0004_task_search_text_v2",
+    checksumInput: taskSearchTextV2,
   },
 ] as const;
 
@@ -113,7 +122,9 @@ export function runTasksDatabaseMigrations(
       options.onProgress?.("migrating", { ...migrationFacts });
       if (migration.id === "0001_adopt_task_schema") adoptSchema(db);
       else if (migration.id === "0002_provider_selection") importLegacyAutomationSelections(db);
-      else db.exec(OFFICIAL_GLM_SELECTION_MIGRATION_SQL);
+      else if (migration.id === "0003_official_glm_selection")
+        db.exec(OFFICIAL_GLM_SELECTION_MIGRATION_SQL);
+      else migrateTaskSearchTextV2(db);
       migrationFacts.executedCount++;
       db.prepare("INSERT INTO tasks_schema_migration VALUES(?,?,?)").run(
         migration.id,
@@ -135,6 +146,18 @@ export function runTasksDatabaseMigrations(
       Object.assign(error, { migrationId: currentMigrationId });
     throw error;
   }
+}
+
+function migrateTaskSearchTextV2(db: DatabaseSync): void {
+  const existing = db.prepare("PRAGMA table_info(tasks)").all();
+  // 旧正文可能包含 assistant 尾部建议；必须在同一事务内清除并标为待重建。
+  if (!existing.some((entry) => entry.name === "searchable_text_version")) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN ${taskSearchTextV2[0]}`);
+  }
+  if (!existing.some((entry) => entry.name === "search_source_revision")) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN ${taskSearchTextV2[1]}`);
+  }
+  db.exec(taskSearchTextV2[2]);
 }
 
 function adoptSchema(db: DatabaseSync): void {

@@ -529,6 +529,15 @@ export function createWindowHostControllerRuntime(options: {
               });
             } catch (error) {
               options.onSourceError?.(source.scope, "search", error);
+              // 索引未就绪是完整性状态，不能降级为空列表让用户误认历史已搜完。
+              if (
+                typeof error === "object" &&
+                error !== null &&
+                "code" in error &&
+                error.code === "TASK_SEARCH_INDEX_NOT_READY"
+              ) {
+                throw error;
+              }
               return [];
             }
           }),

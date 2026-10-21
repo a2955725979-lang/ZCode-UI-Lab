@@ -1,4 +1,5 @@
 import { querySessionDebug } from "./session-debug.js";
+import { readPersistedTaskSearchPage } from "./persisted-task-search-page.js";
 import { createNodeNetworkCapture } from "@zcode/shared/node";
 import { networkCaptureControlSchema, zcodeProtocolNotifications } from "@zcode/shared";
 import {
@@ -626,6 +627,8 @@ export class ZCodeProtocolAgentServer {
         return await resumeSession(this.context, request.params);
       case zcodeProtocolMethods.sessionList:
         return await listSessions(this.context, request.params);
+      case zcodeProtocolMethods.taskIndexReadPersistedSearchPage:
+        return await readPersistedTaskSearchPage(this.context, request.params);
       case zcodeProtocolMethods.sessionSubagents:
         return await listSessionSubagents(this.context, request.params);
       case zcodeProtocolMethods.sessionRead:
