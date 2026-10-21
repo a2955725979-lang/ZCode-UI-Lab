@@ -502,14 +502,24 @@ test("headless follow-up projection strips only metadata from final text and JSO
   const response = `Visible answer\n${directive}`;
   for (const format of ["text", "json", "stream-json"]) {
     const ctx = createContext(["--prompt", "hello", "--output-format", format]);
-    const result = { events: [], projection: fakeProjection, response, traceId: "trace-test", turnId: "turn-test" };
+    const result = {
+      events: [],
+      projection: fakeProjection,
+      response,
+      traceId: "trace-test",
+      turnId: "turn-test",
+    };
     const exitCode = await run(ctx, {
       ...createPromptDeps(),
       mapSessionEvent: (() => ({ type: "unused-fixture-event" })) as never,
-      createZCodeApp: () => ({
-        sessionId: "session-test", traceId: "trace-test", runtime: {} as never,
-        close: async () => {}, submitPrompt: async () => result,
-      }) as never,
+      createZCodeApp: () =>
+        ({
+          sessionId: "session-test",
+          traceId: "trace-test",
+          runtime: {} as never,
+          close: async () => {},
+          submitPrompt: async () => result,
+        }) as never,
     });
     assert.equal(exitCode, 0, `${format}: ${ctx.stderr.output()}`);
     if (format === "text") assert.equal(ctx.stdout.output(), "Visible answer\n");
@@ -521,10 +531,17 @@ test("headless follow-up projection strips only metadata from final text and JSO
 test("headless follow-up projection preserves quoted examples", async () => {
   const response = '> ::next-prompt{label="Example" prompt="Keep this example"}';
   const ctx = createContext(["--prompt", "hello"]);
-  await run(ctx, { ...createPromptDeps(), createZCodeApp: () => ({
-    sessionId: "session-test", traceId: "trace-test", runtime: {} as never,
-    close: async () => {}, submitPrompt: async () => ({ events: [], projection: fakeProjection, response }),
-  }) as never });
+  await run(ctx, {
+    ...createPromptDeps(),
+    createZCodeApp: () =>
+      ({
+        sessionId: "session-test",
+        traceId: "trace-test",
+        runtime: {} as never,
+        close: async () => {},
+        submitPrompt: async () => ({ events: [], projection: fakeProjection, response }),
+      }) as never,
+  });
   assert.equal(ctx.stdout.output(), `${response}\n`);
 });
 
