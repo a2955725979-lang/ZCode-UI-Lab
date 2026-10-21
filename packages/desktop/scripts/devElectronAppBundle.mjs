@@ -9,6 +9,21 @@ export const DEV_ELECTRON_BUNDLE_FORMAT = 3;
 const LAB_APP_NAME = "ZCode UI Lab";
 const LAB_BUNDLE_ID = "dev.zcode.app.ui-lab";
 
+function selectedBundleIdentifier({ isolated, bundleIdentifier }) {
+  if (bundleIdentifier === undefined) return isolated ? LAB_BUNDLE_ID : DEV_ELECTRON_APP_BUNDLE_ID;
+  // 修复原因：不同隔离 home 复用日常 Lab 的 bundle ID 时，LaunchServices 可能把 Dock
+  // 入口解析到测试副本。仅接受受控的 Lab 子标识，不允许覆盖正式或普通开发版身份。
+  if (
+    !isolated ||
+    typeof bundleIdentifier !== "string" ||
+    bundleIdentifier.length > 128 ||
+    !/^dev\.zcode\.app\.ui-lab(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)+$/u.test(bundleIdentifier)
+  ) {
+    throw new Error("Invalid isolated UI Lab bundle identifier");
+  }
+  return bundleIdentifier;
+}
+
 function escapeXml(value) {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;");
 }
@@ -43,9 +58,10 @@ function appendProtocolDeclaration(plist) {
  * raw Electron 的 Info.plist 没有 CFBundleURLTypes，系统只能把 zcode 交给
  * com.github.Electron；这里仅修改启动副本，避免污染 node_modules 中的 Electron。
  */
-export function patchDevElectronInfoPlist(plist, { isolated = false } = {}) {
+export function patchDevElectronInfoPlist(plist, { isolated = false, bundleIdentifier } = {}) {
+  const identifier = selectedBundleIdentifier({ isolated, bundleIdentifier });
   let patched = replacePlistString(plist, "CFBundleDisplayName", isolated ? LAB_APP_NAME : DEV_ELECTRON_APP_NAME);
-  patched = replacePlistString(patched, "CFBundleIdentifier", isolated ? LAB_BUNDLE_ID : DEV_ELECTRON_APP_BUNDLE_ID);
+  patched = replacePlistString(patched, "CFBundleIdentifier", identifier);
   patched = replacePlistString(patched, "CFBundleName", isolated ? LAB_APP_NAME : DEV_ELECTRON_APP_NAME);
   if (isolated) {
     if (patched.includes("<key>CFBundleURLTypes</key>")) throw new Error("Isolated bundle source must not declare URL schemes");
@@ -64,7 +80,9 @@ export async function prepareDevElectronAppBundle({
   electronVersion,
   arch,
   isolated = false,
+  bundleIdentifier,
 }) {
+  const identifier = selectedBundleIdentifier({ isolated, bundleIdentifier });
   const appPath = resolveDevElectronAppBundlePath({ runtimeRoot, electronVersion, arch, isolated });
   const infoPlistPath = posix.join(appPath, "Contents", "Info.plist");
   const sourceExecutablePath = posix.join(electronAppPath, "Contents", "MacOS", "Electron");
@@ -85,6 +103,7 @@ export async function prepareDevElectronAppBundle({
     ? JSON.stringify({
         format: DEV_ELECTRON_BUNDLE_FORMAT,
         isolated,
+        ...(bundleIdentifier === undefined ? {} : { bundleIdentifier: identifier }),
         size: sourceStats.size,
         mtimeMs: sourceStats.mtimeMs,
       })
@@ -95,7 +114,7 @@ export async function prepareDevElectronAppBundle({
     await access(existingExecutablePath);
     const existingStamp = await readFile(sourceStampPath, "utf8");
     needsCopy =
-      !existingInfoPlist.includes(`<string>${isolated ? LAB_BUNDLE_ID : DEV_ELECTRON_APP_BUNDLE_ID}</string>`) ||
+      !existingInfoPlist.includes(`<string>${identifier}</string>`) ||
       (isolated ? existingInfoPlist.includes("<key>CFBundleURLTypes</key>") : !existingInfoPlist.includes(`<string>${DEV_ELECTRON_PROTOCOL_SCHEME}</string>`)) ||
       sourceStamp === undefined ||
       existingStamp !== sourceStamp;
@@ -114,7 +133,7 @@ export async function prepareDevElectronAppBundle({
     // 等 macOS 沙箱子进程只允许读本 bundle 目录，顺链接出去会被拦，表现为
     // "icudtl.dat not found in bundle" 然后 "GPU process isn't usable. Goodbye."。
     await cp(electronAppPath, appPath, { recursive: true, verbatimSymlinks: true });
-    const patchedInfoPlist = patchDevElectronInfoPlist(await readFile(infoPlistPath, "utf8"), { isolated });
+    const patchedInfoPlist = patchDevElectronInfoPlist(await readFile(infoPlistPath, "utf8"), { isolated, bundleIdentifier });
     await writeFile(infoPlistPath, patchedInfoPlist, "utf8");
     // 指纹最后写：中途失败时下次仍会判定为需要重拷，不会留下半成品缓存。
     if (sourceStamp !== undefined) await writeFile(sourceStampPath, sourceStamp, "utf8");

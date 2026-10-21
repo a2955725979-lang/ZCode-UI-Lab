@@ -29,6 +29,28 @@ describe("dev Electron app bundle", () => {
     expect(resolveDevElectronAppBundlePath({ runtimeRoot: "/lab", electronVersion: "41.0.3", arch: "arm64", isolated: true })).toBe("/lab/41.0.3-arm64/ZCode UI Lab.app");
   });
 
+  it("accepts only scoped identifiers for other isolated homes", () => {
+    const plist = '<plist><dict><key>CFBundleDisplayName</key><string>Electron</string><key>CFBundleIdentifier</key><string>com.github.Electron</string><key>CFBundleName</key><string>Electron</string></dict></plist>';
+    const identifier = "dev.zcode.app.ui-lab.smoke.home-0123abcd";
+    const patched = patchDevElectronInfoPlist(plist, { isolated: true, bundleIdentifier: identifier });
+    expect(patched).toContain(`<key>CFBundleIdentifier</key><string>${identifier}</string>`);
+    expect(patched).not.toContain("CFBundleURLTypes");
+
+    for (const invalid of [
+      "dev.zcode.app.ui-lab",
+      "dev.zcode.app.development",
+      "com.github.Electron",
+      "dev.zcode.app.ui-lab.bad.",
+      "dev.zcode.app.ui-lab.Bad",
+      "dev.zcode.app.ui-lab.bad&name",
+      "dev.zcode.app.ui-lab.-bad",
+      `dev.zcode.app.ui-lab.${"a".repeat(129)}`,
+    ]) {
+      expect(() => patchDevElectronInfoPlist(plist, { isolated: true, bundleIdentifier: invalid })).toThrow("Invalid isolated UI Lab bundle identifier");
+    }
+    expect(() => patchDevElectronInfoPlist(plist, { bundleIdentifier: identifier })).toThrow("Invalid isolated UI Lab bundle identifier");
+  });
+
   it("adds a product identity and zcode URL scheme to the raw Electron plist", () => {
     const source = `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0">
@@ -272,5 +294,42 @@ describe("dev Electron app bundle", () => {
     });
 
     expect(await readFile(marker, "utf8")).toBe("kept");
+  });
+
+  it("rebuilds an old isolated cache for a different home identity, then reuses the new one", async () => {
+    const root = await mkdtemp(join(tmpdir(), "zcode-lab-bundle-identity-test-"));
+    tempRoots.push(root);
+    const sourceApp = join(root, "source", "Electron.app");
+    const sourceContents = join(sourceApp, "Contents");
+    await mkdir(join(sourceContents, "MacOS"), { recursive: true });
+    await writeFile(
+      join(sourceContents, "Info.plist"),
+      `<?xml version="1.0"?><plist version="1.0"><dict>
+<key>CFBundleDisplayName</key><string>Electron</string>
+<key>CFBundleIdentifier</key><string>com.github.Electron</string>
+<key>CFBundleName</key><string>Electron</string>
+</dict></plist>\n`,
+      "utf8",
+    );
+    await writeFile(join(sourceContents, "MacOS", "Electron"), "source-v1", "utf8");
+    const outputRoot = join(root, "runtime");
+    const base = { electronAppPath: sourceApp, runtimeRoot: outputRoot, electronVersion: "41.0.3", arch: "arm64", isolated: true };
+    const old = await prepareDevElectronAppBundle(base);
+    const marker = join(old.appPath, "Contents", "cache-witness");
+    await writeFile(marker, "old-home", "utf8");
+
+    const bundleIdentifier = "dev.zcode.app.ui-lab.smoke.home-0123abcd";
+    const rebuilt = await prepareDevElectronAppBundle({ ...base, bundleIdentifier });
+    expect(rebuilt.appPath).toBe(old.appPath);
+    const plist = await readFile(join(rebuilt.appPath, "Contents", "Info.plist"), "utf8");
+    expect(plist).toContain(`<key>CFBundleIdentifier</key><string>${bundleIdentifier}</string>`);
+    expect(plist).not.toContain("<key>CFBundleURLTypes</key>");
+    await expect(readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    const stamp = JSON.parse(await readFile(join(outputRoot, "41.0.3-arm64", ".zcode-dev-electron-source.json"), "utf8"));
+    expect(stamp.bundleIdentifier).toBe(bundleIdentifier);
+
+    await writeFile(marker, "new-home", "utf8");
+    await prepareDevElectronAppBundle({ ...base, bundleIdentifier });
+    expect(await readFile(marker, "utf8")).toBe("new-home");
   });
 });
