@@ -1,4 +1,4 @@
-> **个人定制版：**本仓库是 ZCode UI Lab 的独立源码快照，安装包、数据隔离和功能限制请先阅读 [README.UI-LAB.md](README.UI-LAB.md)。以下保留上游说明。
+**个人定制版：**本仓库是 ZCode UI Lab 的独立源码快照，安装包、数据隔离和功能限制请先阅读 [README.UI-LAB.md](README.UI-LAB.md)。以下保留上游说明。
 
 # ZCode
 
