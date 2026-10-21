@@ -47,21 +47,50 @@ describe("next-prompt suffix metadata", () => {
     "::next-prompt{broken stuff}",
     '::next-prompt{label="a" prompt="b" unexpected="x"}',
     `${directive} 尾随正文`,
-    '::next-prompt{label="检查" prompt="第一行\n第二行"}',
-  ])("完整畸形参数和多行指令保留原文：%s", (text) => {
+    '::next-prompt{label="未闭合',
+  ])("畸形尾候选移除正文但不生成按钮：%s", (tail) => {
+    for (const streaming of [false, true]) {
+      expect(parseFollowupSuggestions(`正文😀\n${tail}`, { streaming })).toEqual({
+        text: "正文😀",
+        suggestions: [],
+      });
+      expect(stripFollowupSuggestionDirectives(`正文😀\n${tail}`, { streaming })).toBe("正文😀");
+    }
+    expect(normalizeConversationShareMarkdown(`正文😀\n${tail}`)).toBe("正文😀");
+    expect(getLatestFollowupSuggestions(snapshot("completedSuccess", `正文😀\n${tail}`))).toEqual(
+      [],
+    );
+  });
+
+  it("合法与畸形候选混合时剥离整个尾部，只把合法项变成按钮", () => {
+    const malformed = '::next-prompt{label="Only label"}';
+    const content = `正文\n${directive}\n\n${malformed}\n${directive}\n`;
+    expect(parseFollowupSuggestions(content)).toEqual({
+      text: "正文",
+      suggestions: [suggestion, suggestion],
+    });
+    expect(normalizeConversationShareMarkdown(content)).toBe("正文");
+  });
+
+  it("跨物理行的候选不是连续尾部，保留整段示例", () => {
+    const text = '::next-prompt{label="检查" prompt="第一行\n第二行"}';
     expect(parseFollowupSuggestions(text)).toEqual({ text, suggestions: [] });
     expect(parseFollowupSuggestions(text, { streaming: true })).toEqual({ text, suggestions: [] });
   });
 
   it.each([
     `${directive}\n后面仍有正文`,
+    "::next-prompt{broken}\n后面仍有正文",
     `正文里的 ${directive}`,
     `\`${directive}\``,
     `\`\`\`text\n${directive}\n\`\`\``,
+    "```text\n::next-prompt{broken}\n```",
     `~~~text\n${directive}`,
     `> ${directive}`,
+    "> 引用示例\n::next-prompt{broken}",
     `> 引用示例\n${directive}`,
     `- ${directive}`,
+    "- 列表示例\n::next-prompt{broken}",
     `1. 列表示例\n${directive}`,
     `- 列表示例\n\n  ${directive}`,
     `    ${directive}`,
@@ -96,12 +125,14 @@ describe("next-prompt suffix metadata", () => {
     "::next-prompt",
     '::next-prompt{label="检查',
     '::next-prompt{label="检查" prompt="',
-  ])("只在流式输出时隐藏最后一行的未闭合前缀：%s", (tail) => {
+  ])("流式只隐藏下一步指令前缀：%s", (tail) => {
     expect(parseFollowupSuggestions(`正文\n${tail}`, { streaming: true })).toEqual({
       text: "正文",
       suggestions: [],
     });
-    expect(stripFollowupSuggestionDirectives(`正文\n${tail}`)).toBe(`正文\n${tail}`);
+    expect(stripFollowupSuggestionDirectives(`正文\n${tail}`)).toBe(
+      tail.startsWith("::next-prompt{") ? "正文" : `正文\n${tail}`,
+    );
     expect(parseFollowupSuggestions(`正文\n${tail}\n后文`, { streaming: true }).text).toBe(
       `正文\n${tail}\n后文`,
     );
@@ -113,6 +144,17 @@ describe("next-prompt suffix metadata", () => {
       });
     }
   });
+
+  it.each(["::other", "::next-else", "::next-prompt-extra", "::next-prompt body"])(
+    "流式分叉前缀和其它命令保持可见：%s",
+    (tail) => {
+      const text = `正文\n${tail}`;
+      expect(parseFollowupSuggestions(text, { streaming: true })).toEqual({
+        text,
+        suggestions: [],
+      });
+    },
+  );
 
   it("流式未闭合尾行之前的完整建议仍可解析", () => {
     expect(
@@ -128,6 +170,11 @@ describe("next-prompt suffix metadata", () => {
     });
     const example = `- 引用😀${newline}${directive}`;
     expect(parseFollowupSuggestions(example)).toEqual({ text: example, suggestions: [] });
+    const malformed = `正文😀${newline}第二行${newline}::next-prompt{label="x"}`;
+    expect(parseFollowupSuggestions(malformed)).toEqual({
+      text: body,
+      suggestions: [],
+    });
   });
 
   it("参数中的引号、反斜杠、花括号与Markdown按共享语法转义", () => {

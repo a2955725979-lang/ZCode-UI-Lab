@@ -52,20 +52,6 @@ function parseSuggestionLine(text: string): FollowupSuggestion | null {
   return label && prompt ? { label, prompt } : null;
 }
 
-function hasClosingBrace(text: string): boolean {
-  let quote: string | null = null;
-  let escaped = false;
-  for (const character of text) {
-    if (quote) {
-      if (escaped) escaped = false;
-      else if (character === "\\") escaped = true;
-      else if (character === quote) quote = null;
-    } else if (character === '"' || character === "'") quote = character;
-    else if (character === "}") return true;
-  }
-  return false;
-}
-
 /** Only a contiguous top-level suffix is metadata; examples and body text stay intact. */
 export function parseFollowupSuggestions(
   content: string,
@@ -80,22 +66,19 @@ export function parseFollowupSuggestions(
   };
   skipBlankLines();
   const tail = lines[index];
-  // 流式暂存仅限最后一行；不能从正文里的未闭合指令吞掉后续段落。
-  if (
-    options.streaming &&
-    tail?.topLevel &&
-    tail.text.startsWith("::") &&
-    !hasClosingBrace(tail.text)
-  ) {
+  // 修复原因：原先任何 :: 尾行都会暂隐，误吞其它命令；只暂隐尚未写完的协议名称。
+  if (options.streaming && tail?.topLevel && "::next-prompt".startsWith(tail.text)) {
     suffixStart = tail.start;
     index -= 1;
     skipBlankLines();
   }
   while (index >= 0) {
     const line = lines[index]!;
-    const suggestion = line.topLevel ? parseSuggestionLine(line.text) : null;
-    if (!suggestion) break;
-    suggestions.unshift(suggestion);
+    if (!line.topLevel || !line.text.startsWith("::next-prompt{")) break;
+    // 修复原因：畸形参数会让旧实现停止扫描，使协议尾部泄漏到渲染、复制和分享。
+    // 候选行一律剥离；只有完整有效的参数才生成可点击建议。
+    const suggestion = parseSuggestionLine(line.text);
+    if (suggestion) suggestions.unshift(suggestion);
     suffixStart = line.start;
     index -= 1;
     skipBlankLines();
