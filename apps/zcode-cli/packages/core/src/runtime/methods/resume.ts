@@ -123,6 +123,11 @@ export async function resumeFromStore(
   });
 
   this.workingDirectory = session.directory;
+  // 旧 Runtime 可能由当前进程的另一个 workspace 创建；冷恢复后项目历史和权限
+  // 必须跟随这条 session 的已持久化身份，不能继续使用启动时的 workspaceRoot。
+  this.workspaceRoot = session.directory;
+  this.config.workspacePath = session.directory;
+  this.config.workspaceIdentity = session.workspaceID;
   this.config.taskType = session.taskType;
   if (this.config.memory) {
     // Memory root 必须使用会话落盘时的 workspace identity，不能沿用进程启动 workspace。

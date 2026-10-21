@@ -4,7 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createSessionId, createPartId, createMessageId, createProjectId } from "@zcode/contracts";
+import {
+  createSessionId,
+  createPartId,
+  createMessageId,
+  createProjectId,
+  projectIdFromWorkspace,
+} from "@zcode/contracts";
 import { SQLITE_MIGRATIONS } from "../src/storage/session-store/migrations.js";
 import { createSqliteSessionStore } from "../src/storage/session-store/sqlite-session-store.js";
 import { seedUnrelatedProviderTables } from "./fixtures/provider-migration-unrelated-tables.js";
@@ -88,7 +94,29 @@ describe("DB109 会话库正式数据迁移", () => {
     const ledger = db.prepare("SELECT * FROM schema_migration ORDER BY id").all();
     entry({ providerId: legacyProvider, modelId: "GLM-5.3" });
     store = createSqliteSessionStore({ dbPath: path });
-    expect(unrelated.map((table) => db.prepare(`SELECT * FROM ${table}`).all())).toEqual(before);
+    for (const [index, table] of unrelated.entries()) {
+      const after = db.prepare(`SELECT * FROM ${table}`).all();
+      const original = before[index]!;
+      if (table === "input_history") {
+        expect(after).toEqual(
+          original.map((row) => ({
+            ...row,
+            project_id: projectIdFromWorkspace({ workspacePath: root }),
+          })),
+        );
+      } else if (table === "local_setting") {
+        expect(after).toEqual(expect.arrayContaining(original));
+        expect(after).toHaveLength(original.length + 1);
+        expect(after.find((row) => row.scope === "project")).toMatchObject({
+          scope_id: projectIdFromWorkspace({ workspacePath: root }),
+          namespace: "permission",
+          key: "mode",
+          value: '{"mode":"build"}',
+        });
+      } else {
+        expect(after).toEqual(original);
+      }
+    }
     expect(
       db.prepare("SELECT * FROM schema_migration WHERE id<? ORDER BY id").all(migrationId),
     ).toEqual(ledger);
@@ -156,7 +184,7 @@ describe("DB109 会话库正式数据迁移", () => {
     const sessionBefore = db.prepare("SELECT * FROM session").get();
     store = createSqliteSessionStore({ dbPath: path });
     expect(store.debugMigrationIds()).toContain(migrationId);
-    expect(store.debugMigrationIds().at(-1)).toBe("0022_backfilled_session_reasoning");
+    expect(store.debugMigrationIds().at(-1)).toBe("0023_project_identity_v2");
     expect(raw("session_entry", "selection")).toEqual({
       ...oldEntry,
       modelSelection: currentSelection,
@@ -178,7 +206,10 @@ describe("DB109 会话库正式数据迁移", () => {
       modelSelection: historicalSelection,
     });
     expect(raw("part", "body")).toEqual(parts[0]!.value);
-    expect(db.prepare("SELECT * FROM session").get()).toEqual(sessionBefore);
+    expect(db.prepare("SELECT * FROM session").get()).toEqual({
+      ...sessionBefore,
+      project_id: projectIdFromWorkspace({ workspacePath: root }),
+    });
     const history = await store.messages({ sessionID });
     expect(history[0]?.info).not.toHaveProperty("model");
     expect(history[1]?.info).not.toHaveProperty("providerID");

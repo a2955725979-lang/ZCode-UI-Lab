@@ -1,5 +1,5 @@
 import { basename, join } from "node:path";
-import { createProjectId, type ProjectId } from "@zcode/contracts";
+import { projectIdFromWorkspace, type ProjectId } from "@zcode/contracts";
 import { resolveProjectMemoryRoot } from "@zcode/core";
 
 export function getCliStorageRoot(storageRoot: string): string {
@@ -26,12 +26,6 @@ export function getProjectMemoryRoot(
   });
 }
 
-export function projectIdFromDirectory(directory: string): ProjectId {
-  return createProjectId(
-    directory
-      .toLowerCase()
-      .replace(/[^a-z0-9._-]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 80) || "default",
-  );
+export function projectIdFromDirectory(directory: string, workspaceIdentity?: string): ProjectId {
+  return projectIdFromWorkspace({ workspacePath: directory, workspaceIdentity });
 }

@@ -106,7 +106,10 @@ export function setSessionModelSelection(
 
 export function getProjectId(this: AgentRuntimeInternal): ProjectId {
   // Bash cd 会改变执行 cwd，但 project identity 不能随工具内 cwd 漂移。
-  return projectIdFromDirectory(this.workspaceRoot);
+  return projectIdFromDirectory(
+    this.config.workspacePath ?? this.workspaceRoot,
+    this.config.workspaceIdentity ?? this.config.memory?.workspaceIdentity,
+  );
 }
 
 export function setWorkingDirectory(this: AgentRuntimeInternal, cwd: string): void {

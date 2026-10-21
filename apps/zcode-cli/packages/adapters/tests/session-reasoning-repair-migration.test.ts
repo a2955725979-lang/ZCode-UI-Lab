@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createSessionId } from "@zcode/contracts";
+import { createSessionId, projectIdFromWorkspace } from "@zcode/contracts";
 import { SQLITE_MIGRATIONS } from "../src/storage/session-store/migrations.js";
 import { createSqliteSessionStore } from "../src/storage/session-store/sqlite-session-store.js";
 
@@ -126,7 +126,10 @@ describe("Todo121：只补 0020 回填后未动过的会话档位", () => {
     store = createSqliteSessionStore({ dbPath: path });
     expect(readEntry().modelSelection.options).toEqual({ reasoningLevel: "max" });
     expect(db.prepare("SELECT * FROM message").all()).toEqual(messages);
-    expect(db.prepare("SELECT * FROM session").get()).toEqual(session);
+    expect(db.prepare("SELECT * FROM session").get()).toEqual({
+      ...session,
+      project_id: projectIdFromWorkspace({ workspacePath: root }),
+    });
     expect(db.prepare("SELECT * FROM session_entry").get()).toEqual({
       ...entry,
       data: JSON.stringify(readEntry()),

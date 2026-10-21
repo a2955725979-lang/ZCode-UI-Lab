@@ -58,6 +58,7 @@ export {
   createMessageId,
   createPartId,
   createProjectId,
+  projectIdFromWorkspace,
   createRootTraceContext,
   createSessionEvent,
   createSessionId,

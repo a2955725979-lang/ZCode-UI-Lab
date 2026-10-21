@@ -34,6 +34,7 @@ import {
   createMessageId,
   createPartId,
   createProjectId,
+  projectIdFromWorkspace,
   createSessionId,
   type EnvInfo,
   type ExecutionPort,
@@ -2092,7 +2093,7 @@ describe("session persistence", () => {
 
     try {
       const app = await createZCodeApp({
-        env: {},
+        env: { ZCODE_STORAGE_DIR: tempRoot },
         eventStore: createInMemorySessionEventStore(),
         modelExecutor: {
           async generateText() {
@@ -2906,13 +2907,7 @@ function createClosableReadable(): NodeJS.ReadableStream {
 }
 
 function testProjectIdFromDirectory(directory: string) {
-  return createProjectId(
-    directory
-      .toLowerCase()
-      .replace(/[^a-z0-9._-]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 80) || "default",
-  );
+  return projectIdFromWorkspace({ workspacePath: directory });
 }
 
 function createRecordingLoggerFactory(): LoggerFactory & {

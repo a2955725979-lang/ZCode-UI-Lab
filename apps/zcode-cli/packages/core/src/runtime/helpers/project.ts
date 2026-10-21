@@ -1,4 +1,4 @@
-import { createProjectId } from "../deps.js";
+import { projectIdFromWorkspace } from "../deps.js";
 import type { ProjectId } from "../deps.js";
 
 export function titleFromInput(input: string): string {
@@ -15,6 +15,6 @@ export function slugify(value: string): string {
   return slug || "session";
 }
 
-export function projectIdFromDirectory(directory: string): ProjectId {
-  return createProjectId(slugify(directory).slice(0, 80) || "default");
+export function projectIdFromDirectory(directory: string, workspaceIdentity?: string): ProjectId {
+  return projectIdFromWorkspace({ workspacePath: directory, workspaceIdentity });
 }

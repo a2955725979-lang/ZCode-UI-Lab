@@ -265,7 +265,10 @@ export async function createZCodeApp(options: ZCodeAppOptions): Promise<ZCodeApp
     const sessionStore =
       options.sessionStore ?? (await openStartupSessionStore(configResult, startupTimer));
     const localSettingStore = asLocalSettingStore(sessionStore);
-    const projectID = projectIdFromDirectory(workingDirectory);
+    const projectID = projectIdFromDirectory(
+      workingDirectory,
+      options.runtimeConfig?.workspaceIdentity ?? options.runtimeConfig?.memory?.workspaceIdentity,
+    );
     const persistedMode = options.runtimeConfig?.mode
       ? undefined
       : readProjectPermissionMode(localSettingStore, projectID);

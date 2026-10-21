@@ -19,6 +19,7 @@ import {
   createModelProviderId,
   createPartId,
   createProjectId,
+  projectIdFromWorkspace,
   createSessionEvent,
   createSessionId,
   createToolCallId,
@@ -222,6 +223,35 @@ describe("AgentRuntime session persistence", () => {
     ).toBe(false);
   });
 
+  it("restores a session's persisted yolo mode above a migrated project's build default", async () => {
+    const sessionId = createSessionId("legacy-yolo-cold-resume");
+    const workspacePath = "/tmp/zcode-legacy-yolo";
+    const store = createRecordingSessionStore();
+    await store.createSession({
+      id: sessionId,
+      projectID: projectIdFromWorkspace({ workspacePath }),
+      slug: "legacy-yolo",
+      directory: workspacePath,
+      path: workspacePath,
+      title: "legacy session",
+      version: "test",
+      permission: { mode: "yolo" },
+    });
+    const runtime = createTestAgentRuntime(
+      sessionId,
+      { mode: "build", workingDirectory: workspacePath },
+      {
+        eventStore: createTestSessionEventStore(),
+        sessionStore: store,
+        modelFactory: createTestModelFactory({} as never),
+      },
+    );
+
+    await runtime.resumeFromStore();
+    expect(runtime.getMode()).toBe("yolo");
+    expect((await store.getSession(sessionId))?.permission?.mode).toBe("yolo");
+  });
+
   it("persists the initial model selection with the session", async () => {
     const sessionId = createSessionId("runtime-persistence-initial-model-selection");
     const store = createRecordingSessionStore();
@@ -358,6 +388,7 @@ describe("AgentRuntime session persistence", () => {
 
     expect(store.createdSessions[0]).toMatchObject({
       directory: persistedDirectory,
+      projectID: projectIdFromWorkspace({ workspacePath: persistedDirectory, workspaceIdentity }),
       taskType: "selection_side_chat",
       workspaceID: workspaceIdentity,
     });
@@ -394,6 +425,9 @@ describe("AgentRuntime session persistence", () => {
     );
 
     await resumedRuntime.resumeFromStore();
+    expect(resumedRuntime.getProjectId()).toBe(
+      projectIdFromWorkspace({ workspacePath: persistedDirectory, workspaceIdentity }),
+    );
     await resumedRuntime.executeTurn("continue persisted memory workspace");
 
     const resumedRequestText = providerMessagesToText(resumedRequests[0] ?? []);
@@ -452,6 +486,9 @@ describe("AgentRuntime session persistence", () => {
     );
 
     await runtime.resumeFromStore();
+    expect(runtime.getProjectId()).toBe(
+      projectIdFromWorkspace({ workspacePath: persistedDirectory }),
+    );
     await runtime.executeTurn("continue local memory workspace");
 
     const requestText = providerMessagesToText(requests[0] ?? []);
@@ -656,7 +693,9 @@ describe("AgentRuntime session persistence", () => {
     await runtime.executeTurn("first prompt");
     await runtime.executeTurn("second prompt");
 
-    const userMessages = store.savedMessages.filter((message) => message.role === "user" && !message.synthetic);
+    const userMessages = store.savedMessages.filter(
+      (message) => message.role === "user" && !message.synthetic,
+    );
     const assistantSaves = store.savedMessages.filter((message) => message.role === "assistant");
     const assistantMessageIds = new Set(assistantSaves.map((message) => message.id));
     const completedAssistantSaves = assistantSaves.filter(
@@ -2822,7 +2861,11 @@ describe("AgentRuntime session persistence", () => {
 
     await runtime.executeTurn("summarize", [{ type: "file", path: "missing.md" }]);
 
-    const userMessages = capturedMessages.filter((message) => message.role === "user" && !providerContentToText(message.content).startsWith("<system-reminder>"));
+    const userMessages = capturedMessages.filter(
+      (message) =>
+        message.role === "user" &&
+        !providerContentToText(message.content).startsWith("<system-reminder>"),
+    );
     expect(userMessages.map((message) => message.content)).toEqual(["summarize"]);
     expect(providerMessagesToText(capturedMessages)).not.toContain(
       "[Attached text/plain: missing.md]",

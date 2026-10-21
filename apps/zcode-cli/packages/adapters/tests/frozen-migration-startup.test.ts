@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { projectIdFromWorkspace } from "@zcode/contracts";
 import { SQLITE_MIGRATIONS } from "../src/storage/session-store/migrations.js";
 import {
   runSqliteSessionMigrations,
@@ -64,6 +65,16 @@ function snapshot(db: DatabaseSync) {
       db.prepare(`SELECT * FROM ${table} ORDER BY id`).all(),
     ]),
   );
+}
+function withMigratedProjectIds(original: ReturnType<typeof snapshot>) {
+  return {
+    ...original,
+    // 旧冻结 SQL 仅登记 0023；启动 runner 还需用会话精确目录完成身份迁移。
+    session: (original.session ?? []).map((row) => ({
+      ...row,
+      project_id: projectIdFromWorkspace({ workspacePath: String(row.directory) }),
+    })),
+  };
 }
 function seedSelections(db: DatabaseSync) {
   const models = [
@@ -144,7 +155,7 @@ describe("Todo144：启动 runner 保持冻结迁移合同", () => {
       applyFrozen(oldDb);
       if (mode === "async") await runSqliteSessionMigrationsAsync(nextDb, ":memory:");
       else runSqliteSessionMigrations(nextDb, ":memory:");
-      expect(snapshot(nextDb)).toEqual(snapshot(oldDb));
+      expect(snapshot(nextDb)).toEqual(withMigratedProjectIds(snapshot(oldDb)));
       expect(nextDb.prepare("SELECT count(*) AS n FROM part").get()?.n).toBe(109);
     },
   );
@@ -157,7 +168,7 @@ describe("Todo144：启动 runner 保持冻结迁移合同", () => {
     const before = snapshot(db);
     runSqliteSessionMigrations(db, ":memory:");
     applyFrozen(db);
-    expect(snapshot(db)).toEqual(before);
+    expect(snapshot(db)).toEqual(withMigratedProjectIds(before));
   });
 
   it("checksum 不符仍失败并回滚，不篡改账本", () => {

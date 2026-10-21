@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { SqliteSessionMigrationError } from "./errors.js";
 import { SQLITE_MIGRATIONS } from "./migrations.js";
+import { migrateProjectIdentityV2 } from "./migrations/0023-project-identity-v2.js";
 import type { SchemaMigrationRow } from "./rows.js";
 
 export const DEFAULT_SQLITE_STARTUP_LOCK_TIMEOUT_MS = 5_000;
@@ -195,6 +196,13 @@ function* migrationSteps(
       } catch (error) {
         throw normalizeMigrationError(error, dbPath, migration.id);
       }
+    }
+    try {
+      // 旧版回滚可能在 0023 已记账后再次写入 slug ID。每次启动都只修复仍为旧格式的
+      // session 及其精确关联历史，并与 schema 迁移共用这一个事务。
+      migrateProjectIdentityV2(db);
+    } catch (error) {
+      throw normalizeMigrationError(error, dbPath, "0023_project_identity_v2");
     }
     yield progress("committing");
     db.exec("commit");

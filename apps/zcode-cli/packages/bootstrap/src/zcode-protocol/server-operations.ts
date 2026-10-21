@@ -1061,7 +1061,7 @@ async function persistImportedSessionHistory(params: {
     await sessionStore.commitSharedContextImportBundle({
       session: {
         id: params.sessionId,
-        projectID: projectIdFromDirectory(workspace.workspacePath),
+        projectID: projectIdFromDirectory(workspace.workspacePath, workspaceIdentity),
         workspaceID: workspaceIdentity as WorkspaceId | undefined,
         traceID: params.record.traceContext.traceId,
         slug: slugifyImportedSession(params.sessionId),
@@ -1136,7 +1136,7 @@ async function persistImportedSessionHistory(params: {
 
   await sessionStore.createSession({
     id: params.sessionId,
-    projectID: projectIdFromDirectory(workspace.workspacePath),
+    projectID: projectIdFromDirectory(workspace.workspacePath, workspaceIdentity),
     // 导入会话创建后会立即 resume；必须先落盘当前 identity，避免恢复时退化为路径隔离。
     workspaceID: workspaceIdentity as WorkspaceId | undefined,
     traceID: params.record.traceContext.traceId,
@@ -1557,7 +1557,7 @@ async function repairLegacyRemoteSessionWorkspaceForResume(
 
   const repaired = await context.deps.sessionStore.repairLegacyRemoteSessionWorkspace({
     sessionID: session.id,
-    projectID: projectIdFromDirectory(legacyRemote.workspacePath),
+    projectID: projectIdFromDirectory(legacyRemote.workspacePath, legacyRemote.workspaceIdentity),
     legacyWorkspaceDirectory,
     workspaceID: legacyRemote.workspaceIdentity,
     workspacePath: legacyRemote.workspacePath,

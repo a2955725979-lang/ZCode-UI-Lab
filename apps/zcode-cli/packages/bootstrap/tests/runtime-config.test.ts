@@ -75,6 +75,26 @@ function createMainOnlyConfigResult() {
 }
 
 describe("resolveAppRuntimeConfig", () => {
+  it("keeps a migrated project's restricted mode above a global yolo default", () => {
+    const configResult = createConfig({
+      cliOverrides: { permission: { mode: "yolo" } },
+      env: {},
+      skipUserConfig: true,
+      workingDirectory,
+    });
+    const resolved = resolveAppRuntimeConfig({
+      cliStorageRoot: "/tmp/zcode-cli",
+      configResult,
+      options: {},
+      persistedMode: "build",
+      subagentOutputRootDir: "/tmp/zcode-cli/agents",
+      workingDirectory,
+    });
+
+    expect(configResult.config.permission.mode).toBe("yolo");
+    expect(resolved.runtimeConfig.mode).toBe("build");
+  });
+
   it.each([
     {
       env: {},

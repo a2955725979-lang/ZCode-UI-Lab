@@ -105,6 +105,8 @@ User 的 `model` 对象和模型切换的 `toModel` 对象；更新已有记录�
 
 ## Permission Migration
 
+Project identity v2 的旧数据裁决见 [Project identity v2 与旧库迁移](../../../../../docs/design/project-identity-migration.md)。旧 project slug 没有可验证的路径/identity；即使一个现存 session 命中，也不能据此证明权限原本只属于它。因此旧 project mode/ruleset 保留在旧 ID，绝不自动复制到 v2 ID。迁移出的每个 v2 项目若没有显式新 mode，写入受限的 build，避免全局 yolo 回退；新身份只能读取精确 v2 key，会话级持久 mode 仍随 session 冷恢复。
+
 The old `permission(project_id, data)` table is migrated into:
 
 ```text
