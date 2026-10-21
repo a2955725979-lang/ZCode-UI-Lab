@@ -69,6 +69,34 @@ draft pane mount
 `deferred` session；首发已经提升为 `immediate` 后不得被迟到 cleanup 删除。提交 prepare 结果前也要
 重新核对 pane/session binding，避免旧 workspace 回包覆盖已创建 task。
 
+### 预热草稿的只读 hydration 与子任务查询
+
+`session/subagents` 与 V4 hydration 共用 `listSessionSubagents`。父会话持久记录不存在时，
+只有查询 ID 自己的 live record 明确为 `deferred`，且 runtime 尚未报告已持久化，才是合法的
+预热草稿：返回当前 `stateRevision` 和空子任务种子，不创建持久记录、不提升生命周期，
+不记录 `persisted_missing` 或制造 `v4.hydrate` 错误。普通查询与 hydration 使用同一判断，
+不能在 UI/bridge 另建一份 draft 事实。
+
+```text
+session/subagents / V4 hydrate
+  -> session store 读取父记录
+     -> 已存在：按持久记录查询与校验子任务（即使协议镜像仍是 deferred）
+     -> 不存在：读取该 ID 的 live record + runtime 持久化事实
+        -> deferred 且 runtime 未持久化：空种子，revision 保持，零写入
+        -> 其他情况：保留 sessionUnavailable 与缺失诊断
+     -> 存储读取失败：原错误继续上抛，不作为合法空草稿处理
+```
+
+`record.persistence` 由已有 admission/event 路径维护，runtime 是实际落盘事实来源；子任务查询
+不另存或回写生命周期。父记录存在优先；runtime 已持久化而镜像尚未对齐时，不能把缺失父记录
+当作未使用草稿。异步父查询返回后再判断当前状态，首发已提升 `immediate` 的会话不适用草稿例外。
+detached child 借用父 backing record 只为读取共享 event/artifact store，不能借父的 draft 状态
+判断 child 的生命周期。
+
+桌面 `desktop-continuous` 与手机 `web-remote-replayable` 复用此规则；hydration、重订阅不落盘、
+不进历史。回归覆盖合法 deferred、已有持久父、未知/损坏 ID、存储错误、提升期间状态变化及
+两种投递语义，保留真实错误和已持久子任务恢复行为。
+
 ## 首发路径
 
 首发按以下优先级执行：

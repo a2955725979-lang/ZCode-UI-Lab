@@ -1710,6 +1710,21 @@ export async function listSessionSubagents(
 
   const parentSession = await store.getSession(params.sessionId as SessionId);
   if (!parentSession) {
+    // 预热草稿只有内存 record，尚无持久父记录；hydrate 与 legacy 查询都应得到空种子。
+    // await 后再核对 owner/生命周期，不能把已关闭、已提升或 runtime 已落盘的会话当作草稿；
+    // 保留上面的真实存储读取，已有持久记录优先，IO 失败也不会被这个例外吞掉。
+    if (
+      liveParent?.persistence === "deferred" &&
+      context.sessions.get(params.sessionId) === liveParent &&
+      liveParent.app.runtime?.isSessionPersisted?.() !== true
+    ) {
+      return {
+        revision: liveParent.stateRevision,
+        childSessionIds: [],
+        running: [],
+        ended: { total: 0, items: [] },
+      };
+    }
     // 诊断：hydrate 会复用子任务种子读取；若 task index/旧 ACP task 残留了无效 ID，
     // 这里会把“持久化记录不存在”包装成 v4.hydrate，必须记录调用阶段而不是只看错误文本。
     context.logger?.warn("ZCode Protocol session subagents has no persisted parent", {
