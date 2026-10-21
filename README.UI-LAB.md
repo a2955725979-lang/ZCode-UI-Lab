@@ -4,7 +4,13 @@
 
 官方源码基线：`aac4755666d09fdcd70272fcf063c077a639015f`。上游使用说明保留在 [README.md](README.md) 和 [README.en.md](README.en.md)。本定制版的使用方式以本文件及 `packaging/` 为准。
 
-## 本次分发
+## 当前源码更新（2026-10-22）
+
+当前分支包含 v2 交互重整、deferred 草稿恢复、后续建议显示与搜索过滤、完整工作区身份迁移及开发版应用身份隔离修复。具体变化和已知未通过项见 [RELEASE-NOTES.zh-CN.md](RELEASE-NOTES.zh-CN.md)。
+
+本次只更新源码，未重新制作或上传安装包。下面的 Portable 分发说明、`PACKAGING-VALIDATION.json` 和现有 Release 资产属于 2026-10-20 首次分发，不能作为当前源码已打包验收的依据。本机单入口开发版仍依赖 Node、Vite 和本地端口；机器专用 Dock 启动器、备份、账号及聊天数据不随仓库分发。
+
+## 历史 Portable 分发（2026-10-20）
 
 - `Releases` 中的 macOS Apple Silicon（arm64）应用 ZIP：解压后得到独立应用，不需要原开发目录、Node.js 或 Vite 服务。
 - 源码归档：包含定制代码、测试、构建脚本和锁文件，不含 `node_modules`、账号、个人配置、聊天记录、缓存或历史审计截图。

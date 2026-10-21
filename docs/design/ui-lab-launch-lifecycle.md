@@ -1,5 +1,7 @@
 # B03 独立 Lab 重启链最小方案
 
+> 分发边界（2026-10-22）：本文保留本机 Lab 的历史设计与验收要求。提到的 `run-ui-lab-p0.mjs`、native entry、guardian 和切换/回滚脚本位于仓库外，包含机器专用路径，不随公开源码分发。克隆仓库不会自动建立同一 Dock 入口；`packaging/` 是独立 Portable 分发流程。本次源码推送未重建 Portable 安装包。下文“不提交 Git”等约束属于当时修复任务，不是当前仓库发布状态。
+
 ## 目标和边界
 
 修复生成 Lab 的应用内 app.relaunch 重新进入现有 root/origin=5184 的 renderer 链路，覆盖重复打开、正常退出及端口冲突。只修改 Lab 根 native / launcher / guardian 及必要根测试；不改 Desktop main 或正式应用；不改 Framework、Helpers、fuse、sandbox、用户数据、账号或更新策略；不发送模型请求、不提交 Git。
@@ -7,7 +9,7 @@
 ## 已核对的事实
 
 - run-ui-lab-p0.mjs 的 Dock 流程以 launcher PID 启动 guardian，ready 后 execve 生成 Lab Electron，同 PID 进入业务。
-- ui-lab-native-entry.c 仅无参或 -psn_ 认作 Dock；包含业务 appDirectory 参数时直接进入 ElectronMain。
+- ui-lab-native-entry.c 仅无参或 `-psn_` 认作 Dock；包含业务 appDirectory 参数时直接进入 ElectronMain。
 - ui-lab-preview-guardian.mjs 只有最初 owner PID，owner 退出立即 finally close 自己启动的 renderer。
 - source main 的三处默认 app.relaunch() 不改 argv。Electron 本地官方 app.md 说明默认使用当前参数、等待旧进程退出后重启。
 - 2026-10-18 原始审计记载 48453 正常退出、48967 创建窗口后 5184 ERR_CONNECTION_REFUSED；旧 guardian 48454 消失，与上述代码路径一致。没有把未获取的实时 argv 或 stopReason 写成已观察。
