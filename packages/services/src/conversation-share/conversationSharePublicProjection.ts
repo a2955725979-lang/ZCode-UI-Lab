@@ -1,5 +1,8 @@
 /* oxlint-disable eslint(max-lines) -- 公开 Row 的 allow-list 构建与闭包校验必须同处一个策略边界，拆分会让 builder/validator 规则漂移。 */
-import type { ConversationShareArtifactDescriptor } from "@zcode/shared";
+import {
+  stripFollowupSuggestionDirectives,
+  type ConversationShareArtifactDescriptor,
+} from "@zcode/shared";
 import type { ArtifactRow, ConversationRow } from "@zcode/shared/zcode-protocol-v4";
 
 import { ConversationShareServiceError } from "./conversationShare.js";
@@ -331,7 +334,8 @@ function projectRow(row: ConversationRow, index: number, ids: PublicIdMaps): Con
       return {
         ...base,
         kind: "assistantText",
-        text: row.text,
+        // 分享的公开正文也必须过滤尾部元数据；不能仅依赖接收端 UI 隐藏。
+        text: stripFollowupSuggestionDirectives(row.text),
         state: row.state,
         ...(row.model ? { model: row.model } : {}),
       };

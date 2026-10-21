@@ -8,6 +8,8 @@
 
 ## 产品边界
 
+公开 assistant row 及导入 Markdown 的正文必须复用共享后续建议过滤函数，在原始 Markdown 上移除有效尾部元数据；保留示例与本地历史原文，不增加或更改分享 schema、存储格式或权限。
+
 V1 支持 Desktop 本地、SSH、WSL、Docker workspace 发起分享。手机 `/remote` 和普通 Web
 不得发起分享；`packages/web` 的 `/cn/share/:share_code` 只消费 preview API 并通过 deep link 唤起 Desktop。Desktop Server
 Remote 首期不支持。

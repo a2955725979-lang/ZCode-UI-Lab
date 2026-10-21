@@ -132,6 +132,18 @@ function expectBuildFailure(rows: ConversationRow[], kind: string): void {
 }
 
 describe("conversation share public projection", () => {
+  it("removes follow-up metadata from exported assistant rows without mutating history", () => {
+    const rows = rowsWithCompletedSubagent();
+    const assistant = rows.find((row) => row.kind === "assistantText");
+    if (!assistant || assistant.kind !== "assistantText")
+      throw new Error("fixture assistant missing");
+    const directive = '::next-prompt{label="Next" prompt="Inspect the result"}';
+    assistant.text = `Visible answer\n${directive}`;
+    const projected = build(rows).rows.find((row) => row.kind === "assistantText");
+    expect(projected).toMatchObject({ text: "Visible answer" });
+    expect(assistant.text).toContain(directive);
+  });
+
   it("SHARE02：重建 artifact 公开身份并保留本地读取引用在 sidecar", () => {
     const rows = rowsWithCompletedSubagent();
     rows.push({

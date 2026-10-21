@@ -2,6 +2,28 @@ import { describe, expect, it } from "vitest";
 import { formatSharedContextV1 } from "../src/conversation-share/sharedContextFormatter.js";
 
 describe("SharedContextFormatterV1", () => {
+  it("projects follow-up metadata for older imported rows while preserving examples", () => {
+    const directive = '::next-prompt{label="Next" prompt="Inspect the result"}';
+    for (const text of [`Visible answer\n${directive}`, `> ${directive}`]) {
+      const row = {
+        rowId: 1,
+        turnId: "turn-1",
+        createdAt: 1,
+        createdAtSeq: 1,
+        kind: "assistantText" as const,
+        state: "complete" as const,
+        text,
+      };
+      const result = formatSharedContextV1({
+        share: { shareId: "share-1", title: "Test" },
+        rows: [row],
+        installedArtifacts: [],
+      });
+      expect(result.markdown.includes(directive)).toBe(text.startsWith(">"));
+      expect(row.text).toBe(text);
+    }
+  });
+
   it("稳定格式化 Rows 并把 artifact ref 改写为 workspace 相对路径", () => {
     const input = {
       share: { shareId: "share-1", title: "Research" },

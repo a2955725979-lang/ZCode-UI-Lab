@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { stripFollowupSuggestionDirectives } from "@zcode/shared";
 
 import type { ConversationRow } from "@zcode/shared/zcode-protocol-v4";
 
@@ -67,7 +68,8 @@ export function formatSharedContextV1(
         }
         break;
       case "assistantText":
-        sections.push(`## Assistant\n\n${row.text}`);
+        // 旧分享仍可能含有原始后续建议；导入文本使用与展示相同的纯投影。
+        sections.push(`## Assistant\n\n${stripFollowupSuggestionDirectives(row.text)}`);
         break;
       case "reasoning":
         sections.push(`## Reasoning\n\n${row.text}`);
