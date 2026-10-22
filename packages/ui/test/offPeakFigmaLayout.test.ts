@@ -99,21 +99,36 @@ describe("idle-time task Figma layout contracts", () => {
   });
 
   it("keeps the idle-time entry component available without mounting it on the draft homepage", () => {
+    const suggestionsStart = sessionPaneSource.indexOf("const draftSuggestionsNode = (");
+    const suggestionsEnd = sessionPaneSource.indexOf("const showQuotaBanner =", suggestionsStart);
+    const suggestionsSource = sessionPaneSource.slice(suggestionsStart, suggestionsEnd);
     const dockStart = sessionPaneSource.indexOf(
       "const conversationBottomDockContent = readOnly ? null :",
     );
     const dockEnd = sessionPaneSource.indexOf("\n  );\n", dockStart);
     const dockSource = sessionPaneSource.slice(dockStart, dockEnd);
 
+    expect(suggestionsStart).toBeGreaterThanOrEqual(0);
+    expect(suggestionsEnd).toBeGreaterThan(suggestionsStart);
     expect(dockStart).toBeGreaterThanOrEqual(0);
+    expect(dockEnd).toBeGreaterThan(dockStart);
     // 首页入口暂时下线；组件与布局契约继续保留备用。
     expect(dockSource).not.toContain("<OffPeakNewTaskEntry");
-    expect(dockSource).toContain("<ConversationDraftSuggestedPromptsContainer");
+    // 建议区已抽为共享节点；分别验证内容与 Chat 输入前、Work 输入后的挂载顺序。
+    expect(suggestionsSource).toContain("<ConversationDraftSuggestedPromptsContainer");
+    const chatSuggestionsIndex = dockSource.indexOf("{isOfficeMode ? draftSuggestionsNode : null}");
+    const composerIndex = dockSource.indexOf("{composerNode}");
+    const workSuggestionsIndex = dockSource.indexOf(
+      "{!isOfficeMode ? draftSuggestionsNode : null}",
+    );
+    expect(chatSuggestionsIndex).toBeGreaterThanOrEqual(0);
+    expect(composerIndex).toBeGreaterThan(chatSuggestionsIndex);
+    expect(workSuggestionsIndex).toBeGreaterThan(composerIndex);
     expect(sessionPaneSource).not.toContain(
       'import { OffPeakNewTaskEntry } from "@/v4/OffPeakNewTaskEntry.js"',
     );
     expect(sessionPaneSource).not.toContain("<OffPeakNewTaskEntry");
-    expect(dockSource).toContain("isWebRemoteControl={compactForRemoteControl}");
+    expect(suggestionsSource).toContain("isWebRemoteControl={compactForRemoteControl}");
 
     expect(offPeakNewTaskEntrySource).toContain("max-w-[780px]");
     expect(offPeakNewTaskEntrySource).toContain("pb-[38px]");

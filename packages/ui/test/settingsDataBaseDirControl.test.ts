@@ -16,9 +16,9 @@ const EXPECTED_NATIVE_SEARCH_DESCRIPTION_ZH =
 const EXPECTED_NATIVE_SEARCH_DESCRIPTION_EN =
   "Use enhanced Find and Grep in new sessions and sessions restored after an app restart. Active sessions keep their current setting; Find remains unchanged on Windows.";
 const EXPECTED_MEMORY_DESCRIPTION_ZH =
-  "在工作区中保存并复用长期上下文，新会话生效。开启后可能增加模型调用和 Token 成本。";
+  "此开关保存在当前应用 profile，对新会话生效；已有会话保持原设置。开启后可能增加模型调用和 Token 成本。";
 const EXPECTED_MEMORY_DESCRIPTION_EN =
-  "Save and reuse long-term context in workspaces. Applies to new sessions and may increase model requests and token costs.";
+  "This switch is saved in the current app profile and applies to new sessions. Existing sessions retain their settings. Enabling it may increase model calls and token costs.";
 const EXPECTED_ASK_AUTO_RESOLUTION_DESCRIPTION_ZH =
   "开启后，Agent 提问 5 分钟未回答会自动继续；关闭后，当前和后续提问会一直等待你的回答。";
 const EXPECTED_ASK_AUTO_RESOLUTION_DESCRIPTION_EN =
@@ -345,12 +345,12 @@ describe("GeneralSectionContent data directory control", () => {
     );
   });
 
-  it("记忆模块使用单段中英文说明表达工作区语义、生效边界和用量提示", () => {
-    expect(enUS["settings.memory"]).toBe("Memory");
+  it("记忆模块使用单段中英文说明表达 profile 保存范围、新旧会话边界和用量提示", () => {
+    expect(enUS["settings.memory"]).toBe("Workspace memory");
     expect(enUS["settings.memory.workspaceMemory"]).toBe("Workspace Memory");
     expect(enUS["settings.memoryDescription"]).toBe(EXPECTED_MEMORY_DESCRIPTION_EN);
     expect(enUS).not.toHaveProperty("settings.memoryUsageNotice");
-    expect(zhCN["settings.memory"]).toBe("记忆");
+    expect(zhCN["settings.memory"]).toBe("工作区记忆");
     expect(zhCN["settings.memory.workspaceMemory"]).toBe("工作区记忆");
     expect(zhCN["settings.memoryDescription"]).toBe(EXPECTED_MEMORY_DESCRIPTION_ZH);
     expect(zhCN).not.toHaveProperty("settings.memoryUsageNotice");

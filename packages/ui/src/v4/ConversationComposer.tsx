@@ -195,6 +195,8 @@ import { buildV4ConversationPromptTelemetryExtraDetail } from "@/v4/telemetry/co
 import { resolveAttachableShareContext } from "@/lib/conversationShareContext.js";
 
 const MODEL_SELECTION_LOADING_STATE: ModelSelectionState = { status: "loading" };
+// 默认空建议保持模块级引用，避免 memo 组件每次渲染重建数组并使回调依赖失稳。
+const EMPTY_FOLLOWUP_SUGGESTIONS: readonly FollowupSuggestion[] = [];
 
 export interface ConversationComposerSendOptions {
   /** 点击发送时复制的配置；null 表示未完成选择，Host 不得从 Session 补齐。 */
@@ -534,7 +536,7 @@ function ConversationComposerImpl({
   draftMode = false,
   workMode = false,
   workTaskBriefEnabled = true,
-  followupSuggestions = [],
+  followupSuggestions = EMPTY_FOLLOWUP_SUGGESTIONS,
   followupSuggestionsEnabled = true,
   draftConfig,
   composerDraft,

@@ -244,7 +244,7 @@ describe("WebRemoteControlTaskIndex layout", () => {
     );
   });
 
-  it("lets the wide remote sidebar render its workspace toolbar after pinned tasks", () => {
+  it("lets the wide remote sidebar render its workspace toolbar before pinned tasks", () => {
     const taskIndexSource = readFileSync(
       resolve(process.cwd(), "packages/ui/src/WebRemoteControlTaskIndex.tsx"),
       "utf8",
@@ -256,12 +256,20 @@ describe("WebRemoteControlTaskIndex layout", () => {
 
     expect(taskIndexSource).toContain("renderBeforePinnedTasks");
     expect(taskIndexSource).toContain("model.pinnedTasks.map((task) => renderTaskRow(task))");
-    expect(
-      taskIndexSource.indexOf("{renderBeforePinnedTasks ? renderBeforePinnedTasks() : null}"),
-    ).toBeLessThan(taskIndexSource.indexOf("{model.pinnedTasks.length > 0 ? ("));
+    const toolbarIndex = taskIndexSource.indexOf(
+      "{renderBeforePinnedTasks ? renderBeforePinnedTasks() : null}",
+    );
+    const pinnedTasksIndex = taskIndexSource.indexOf("{model.pinnedTasks.length > 0 ? (");
+    expect(toolbarIndex).toBeGreaterThanOrEqual(0);
+    expect(pinnedTasksIndex).toBeGreaterThanOrEqual(0);
+    expect(toolbarIndex).toBeLessThan(pinnedTasksIndex);
     expect(sidebarSource).toContain("const workspaceTaskToolbar");
-    expect(sidebarSource).toContain("renderBeforePinnedTasks={isChatMode ? undefined : workspaceTaskToolbar}");
-    expect(sidebarSource).toContain(") : !isWebRemoteControlSidebar ? workspaceTaskToolbar() : null}");
+    expect(sidebarSource).toContain(
+      "renderBeforePinnedTasks={isChatMode ? undefined : workspaceTaskToolbar}",
+    );
+    expect(sidebarSource).toContain(
+      "{!isChatMode && !isWebRemoteControlSidebar ? workspaceTaskToolbar() : null}",
+    );
   });
 
   it("keeps mutable wide remote task actions out of the initial static markup", async () => {

@@ -96,7 +96,9 @@ describe("side pane toggle empty state", () => {
     const sidePanePanelEnd = source.indexOf("const mobileSidePanePanelRef", sidePanePanelStart);
     const panelSource = source.slice(sidePanePanelStart, sidePanePanelEnd);
 
-    expect(panelSource).toContain('open: workspaceMainView === "chat" && isSidePaneOpen');
+    expect(panelSource).toContain(
+      'open: !hideEngineeringSidePane && workspaceMainView === "chat" && isSidePaneOpen',
+    );
     expect(panelSource).not.toContain("Boolean(screenshotSurfaceRequest)");
 
     const browserSource = readSource("packages/ui/src/browser-use/BrowserUseSidePaneContent.tsx");

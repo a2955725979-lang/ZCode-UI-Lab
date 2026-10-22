@@ -32,7 +32,12 @@ describe("authoritative regenerate confirmation", () => {
     render(action(retry));
     fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
     expect(retry).not.toHaveBeenCalled();
-    expect(screen.getByRole("alertdialog").textContent).toContain("all later conversation content");
+    const confirmation = screen.getByRole("alertdialog").textContent;
+    // 文案已精简，仍须明确删除当前及后续内容、重新生成和工具重复执行的影响。
+    expect(confirmation).toContain(
+      "This reply and everything after it will be deleted and regenerated.",
+    );
+    expect(confirmation).toContain("Tools may run again.");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(retry).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));

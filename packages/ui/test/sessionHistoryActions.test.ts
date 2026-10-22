@@ -3,7 +3,10 @@ import { createElement } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useSessionHistoryActions } from "@/hooks/useSessionHistoryActions.js";
-import { getExplicitSessionHistoryMode } from "@/store/sessionHistoryModeStore.js";
+import {
+  createSessionHistoryModeStore,
+  getExplicitSessionHistoryMode,
+} from "@/store/sessionHistoryModeStore.js";
 import { ZCodeIntlProvider } from "@/i18n/IntlProvider.js";
 import { TaskActionMenuContent } from "@/TaskActionMenuContent.js";
 const toast = vi.hoisted(() => vi.fn());
@@ -19,17 +22,32 @@ describe("history move action", () => {
     render(createElement(ZCodeIntlProvider, { initialLocale: "en-US" }, createElement(Actions)));
     fireEvent.click(screen.getByRole("button", { name: "work" }));
     expect(getExplicitSessionHistoryMode(scope, "legacy")).toBe("chat");
+    expect(
+      createSessionHistoryModeStore(localStorage).getExplicitSessionHistoryMode(scope, "legacy"),
+    ).toBe("chat");
+    expect(toast).toHaveBeenLastCalledWith("Moved to Chat");
     fireEvent.click(screen.getByRole("button", { name: "chat" }));
     expect(getExplicitSessionHistoryMode(scope, "legacy")).toBe("work");
-    expect(toast).toHaveBeenLastCalledWith("Moved to Work. Messages and file context are unchanged.");
+    expect(
+      createSessionHistoryModeStore(localStorage).getExplicitSessionHistoryMode(scope, "legacy"),
+    ).toBe("work");
+    expect(toast).toHaveBeenLastCalledWith("Moved to Work");
   });
   it("reports persistence failure and leaves the old classification visible", () => {
     render(createElement(ZCodeIntlProvider, { initialLocale: "en-US" }, createElement(Actions)));
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("quota"); });
+    // 先保存旧归属，再验证写入失败不会修改界面或已持久化的分类。
     fireEvent.click(screen.getByRole("button", { name: "work" }));
-    expect(screen.getByRole("button", { name: "work" })).toBeTruthy();
-    expect(getExplicitSessionHistoryMode(scope, "legacy")).toBeUndefined();
-    expect(toast).toHaveBeenCalledWith("Could not save the category. The conversation was not moved.");
+    toast.mockClear();
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("quota");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "chat" }));
+    expect(screen.getByRole("button", { name: "chat" })).toBeTruthy();
+    expect(getExplicitSessionHistoryMode(scope, "legacy")).toBe("chat");
+    expect(
+      createSessionHistoryModeStore(localStorage).getExplicitSessionHistoryMode(scope, "legacy"),
+    ).toBe("chat");
+    expect(toast).toHaveBeenCalledExactlyOnceWith("Could not move. Try again.");
   });
   it("offers only the opposite category and respects the disabled action boundary", () => {
     const onMove = vi.fn();
