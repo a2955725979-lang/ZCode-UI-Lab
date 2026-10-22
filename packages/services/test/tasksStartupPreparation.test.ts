@@ -6,11 +6,34 @@ import { expect, it, vi } from "vitest";
 import { prepareTasksIndexStorage } from "../src/session/tasksDatabase/startup.js";
 import { runTasksDatabaseMigrations } from "../src/session/tasksDatabase/migrations.js";
 
+// 0004 新增迁移后仍冻结前三条账本，防止只更新数量而掩盖历史 checksum 变化。
+const frozenTasksLedger = [
+  {
+    id: "0001_adopt_task_schema",
+    checksum: "3e8337b015d94b05dd31a6003f3acc649e821794cfa288bc0af3022698bd4d17",
+  },
+  {
+    id: "0002_provider_selection",
+    checksum: "7244ef7c351f8d02750ab1953fff09f493a71befbf1b6e2d4bab726b0c6b48fc",
+  },
+  {
+    id: "0003_official_glm_selection",
+    checksum: "8987adb50ae412a46c294141c1af89ccfc252f22d41351bdf4c7528f56edc8b4",
+  },
+  {
+    id: "0004_task_search_text_v2",
+    checksum: "635e9b647c16a240a3638645b56f30909045756f4405156e4605a29dec9a16a7",
+  },
+];
+
 it("prepares the same frozen ledger as the old runner and preserves completed data", async () => {
   const dir = await mkdtemp(join(tmpdir(), "zcode-startup-"));
   const expected = new DatabaseSync(":memory:");
   try {
     runTasksDatabaseMigrations(expected);
+    expect(
+      expected.prepare("SELECT id, checksum FROM tasks_schema_migration ORDER BY id").all(),
+    ).toEqual(frozenTasksLedger);
     const path = join(dir, "tasks.sqlite");
     const phases: string[] = [];
     await prepareTasksIndexStorage(path, (phase) => {
@@ -94,8 +117,8 @@ it("SILENTDB-01/02: reports maintenance separately and no migration for a prepar
       expect.objectContaining({
         migration: {
           kind: "initialize",
-          executedCount: 3,
-          committedCount: 3,
+          executedCount: 4,
+          committedCount: 4,
           lastAppliedMigrationId: null,
         },
       }),
@@ -104,7 +127,7 @@ it("SILENTDB-01/02: reports maintenance separately and no migration for a prepar
     await prepareTasksIndexStorage(path, (phase, migration) => second.push({ phase, migration }));
     expect(second.some((s) => s.phase === "migrating")).toBe(false);
     expect(second.at(-1)).toMatchObject({
-      migration: { lastAppliedMigrationId: "0003_official_glm_selection" },
+      migration: { lastAppliedMigrationId: "0004_task_search_text_v2" },
     });
     expect(second.some((s) => s.phase === "maintaining")).toBe(true);
     expect(second).toContainEqual(
@@ -135,12 +158,20 @@ it("retains committed facts if closing the migration connection fails", async ()
     expect(states.at(-1)).toMatchObject({
       migration: {
         kind: "initialize",
-        executedCount: 3,
-        committedCount: 3,
+        executedCount: 4,
+        committedCount: 4,
         lastAppliedMigrationId: null,
       },
     });
     expect(states.some(({ phase }) => phase === "ready")).toBe(false);
+    const committed = new DatabaseSync(join(dir, "tasks.sqlite"));
+    try {
+      expect(
+        committed.prepare("SELECT id, checksum FROM tasks_schema_migration ORDER BY id").all(),
+      ).toEqual(frozenTasksLedger);
+    } finally {
+      committed.close();
+    }
   } finally {
     close.mockRestore();
     await rm(dir, { recursive: true, force: true });
@@ -176,7 +207,13 @@ it("keeps the pre-upgrade task ledger ID after committing the remaining migratio
     await prepareTasksIndexStorage(path, () => {});
     const db = new DatabaseSync(path);
     try {
-      db.exec("DELETE FROM tasks_schema_migration WHERE id='0003_official_glm_selection'");
+      // 构造真实的 0003 升级起点，不能留下最新账本却删除较早迁移。
+      db.exec(`DELETE FROM tasks_schema_migration WHERE id='0004_task_search_text_v2';
+        ALTER TABLE tasks DROP COLUMN searchable_text_version;
+        ALTER TABLE tasks DROP COLUMN search_source_revision;`);
+      expect(
+        db.prepare("SELECT id, checksum FROM tasks_schema_migration ORDER BY id").all(),
+      ).toEqual(frozenTasksLedger.slice(0, 3));
     } finally {
       db.close();
     }
@@ -188,9 +225,17 @@ it("keeps the pre-upgrade task ledger ID after committing the remaining migratio
         kind: "upgrade",
         executedCount: 1,
         committedCount: 1,
-        lastAppliedMigrationId: "0002_provider_selection",
+        lastAppliedMigrationId: "0003_official_glm_selection",
       },
     });
+    const upgraded = new DatabaseSync(path);
+    try {
+      expect(
+        upgraded.prepare("SELECT id, checksum FROM tasks_schema_migration ORDER BY id").all(),
+      ).toEqual(frozenTasksLedger);
+    } finally {
+      upgraded.close();
+    }
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
