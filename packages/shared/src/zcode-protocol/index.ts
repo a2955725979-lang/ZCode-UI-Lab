@@ -4,6 +4,7 @@ import { zcodeProtocolTraceSchema } from "./trace.js";
 export { channelReplyRequestSchema, channelReplyResultSchema } from "../channel-mention.js";
 export { zcodeProtocolTraceSchema, type ZCodeProtocolTrace } from "./trace.js";
 export {
+  LEGACY_TASK_INDEX_READ_PERSISTED_SEARCH_PAGE_METHOD,
   zcodeTaskIndexReadPersistedSearchPageParamsSchema,
   zcodeTaskIndexReadPersistedSearchPageResultSchema,
   type ZCodeTaskIndexReadPersistedSearchPageParams,
@@ -4083,7 +4084,7 @@ export const zcodeProtocolMethods = {
   sessionCreate: "session/create",
   sessionResume: "session/resume",
   sessionList: "session/list",
-  taskIndexReadPersistedSearchPage: "task-index/readPersistedSearchPage",
+  sessionReadPersistedSearchPage: "session/readPersistedSearchPage",
   sessionSubagents: "session/subagents",
   sessionRequestRuntimePreferences: "session/requestRuntimePreferences",
   subagentsReadRuntimeConfig: "subagents/readRuntimeConfig",

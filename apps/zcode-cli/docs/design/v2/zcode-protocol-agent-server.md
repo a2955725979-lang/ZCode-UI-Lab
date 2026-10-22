@@ -11,6 +11,10 @@ z-code 桌面端后续不再通过 ZCode app-server 兼容多 agent，而是只�
 - ZCode Protocol schema 仍由外层 z-code workspace 的 `packages/shared/src/zcode-protocol/index.ts` 单文件导出。
 - v1 只实现 stdio transport；WebSocket 留给 cloud IDE/remote sandbox 后续复用同一 envelope。
 
+### 持久会话只读搜索兼容
+
+冷历史正文分页使用 `session/readPersistedSearchPage`，参数和结果继续由共享 strict schema 校验，始终读取 SessionStore 的 active branch，不构造 runtime 或发送模型请求。正式方法表不引入 task 生命周期或 task-index 方法族。仅兼容已部署 Host 的精确旧别名 `task-index/readPersistedSearchPage`，两个 case 共用同一 handler，不增加写操作或权限。新版 Host 对旧 CLI 仅在 `-32601` 时回退此别名；其它错误和结果校验失败不得回退。新旧双方都未提供此查询时，搜索继续报告未就绪。
+
 ## 状态归属
 
 插件 `plugins/referenceCatalog` 与 `plugins/referenceCatalogWithCategory` 沿现有 listing join

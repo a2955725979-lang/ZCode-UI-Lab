@@ -533,6 +533,53 @@ process.stdin.on("data", (chunk) => {
 });
 `;
 
+const PERSISTED_SEARCH_PAGE_FAKE_AGENT = `
+const fs = require("node:fs");
+const logPath = process.argv[2];
+const mode = process.argv[3];
+let buf = "";
+function send(obj) { process.stdout.write(JSON.stringify(obj) + "\\n"); }
+process.stdin.on("data", (chunk) => {
+  buf += chunk.toString("utf8");
+  let idx;
+  while ((idx = buf.indexOf("\\n")) >= 0) {
+    const line = buf.slice(0, idx);
+    buf = buf.slice(idx + 1);
+    if (!line.trim()) continue;
+    let msg;
+    try { msg = JSON.parse(line); } catch { continue; }
+    if (msg.id === undefined || ![
+      "session/readPersistedSearchPage",
+      "task-index/readPersistedSearchPage",
+    ].includes(msg.method)) continue;
+    fs.appendFileSync(logPath, JSON.stringify({ method: msg.method, params: msg.params }) + "\\n");
+    if (msg.method === "session/readPersistedSearchPage") {
+      if (mode === "legacy-only") {
+        send({ id: msg.id, error: { code: -32601, message: "Method not found" } });
+        continue;
+      }
+      if (mode === "invalid-params" || mode === "permission-denied") {
+        send({ id: msg.id, error: mode === "invalid-params"
+          ? { code: -32602, message: "Invalid search params" }
+          : { code: -32003, message: "Search permission denied" }
+        });
+        continue;
+      }
+      if (mode === "invalid-result") {
+        send({ id: msg.id, result: { items: [], complete: "yes" } });
+        continue;
+      }
+    }
+    // 旧方法总能成功，以便发现普通错误或无效响应被错误 fallback 掩盖。
+    send({ id: msg.id, result: {
+      items: [{ sessionId: "persisted-session", sourceRevision: "a".repeat(64), searchableText: "persisted body" }],
+      nextCursor: "next/persisted?offset=8",
+      complete: false,
+    } });
+  }
+});
+`;
+
 const DELAYED_COMPACT_FAKE_AGENT = `
 let buf = "";
 function send(obj) { process.stdout.write(JSON.stringify(obj) + "\\n"); }
@@ -1999,6 +2046,87 @@ describe("createZCodeAgentService", () => {
     await service.disposeAllAndWait();
   });
 
+  it.each([
+    {
+      mode: "canonical",
+      expectedMethods: ["session/readPersistedSearchPage"],
+      expectedFailure: undefined,
+    },
+    {
+      mode: "legacy-only",
+      expectedMethods: ["session/readPersistedSearchPage", "task-index/readPersistedSearchPage"],
+      expectedFailure: undefined,
+    },
+    {
+      mode: "invalid-params",
+      expectedMethods: ["session/readPersistedSearchPage"],
+      expectedFailure: { code: -32602, message: "Invalid search params" },
+    },
+    {
+      mode: "permission-denied",
+      expectedMethods: ["session/readPersistedSearchPage"],
+      expectedFailure: { code: -32003, message: "Search permission denied" },
+    },
+    {
+      mode: "invalid-result",
+      expectedMethods: ["session/readPersistedSearchPage"],
+      expectedFailure: {
+        name: "ZodError",
+        issues: expect.arrayContaining([expect.objectContaining({ path: ["complete"] })]),
+      },
+    },
+  ])(
+    "reads persisted search pages with canonical protocol and limited legacy fallback: $mode",
+    async (testCase) => {
+      const workspacePath = mkdtempSync(join(tmpdir(), "zcode-agent-persisted-search-"));
+      createdDirs.push(workspacePath);
+      const scriptPath = join(workspacePath, "persisted-search-agent.cjs");
+      const logPath = join(workspacePath, "protocol.log");
+      writeFileSync(scriptPath, PERSISTED_SEARCH_PAGE_FAKE_AGENT);
+      const service = createReadyZCodeAgentService({
+        commandResolver: () => ({
+          command: process.execPath,
+          args: [scriptPath, logPath, testCase.mode],
+        }),
+      });
+      const wireParams = {
+        workspacePath,
+        workspaceIdentity: "remote:ssh:search-host:/workspace/中文 project",
+        cursor: "opaque/cursor?offset=7&revision=a%2Fb",
+        limit: 7,
+      };
+      try {
+        const result = service.readPersistedTaskSearchPage({
+          ...wireParams,
+          runtimePolicy: "start-if-needed",
+        });
+        if (testCase.expectedFailure) {
+          await expect(result).rejects.toMatchObject(testCase.expectedFailure);
+        } else {
+          await expect(result).resolves.toEqual({
+            items: [
+              {
+                sessionId: "persisted-session",
+                sourceRevision: "a".repeat(64),
+                searchableText: "persisted body",
+              },
+            ],
+            nextCursor: "next/persisted?offset=8",
+            complete: false,
+          });
+        }
+        expect(
+          readFileSync(logPath, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line) as { method: string; params: unknown }),
+        ).toEqual(testCase.expectedMethods.map((method) => ({ method, params: wireParams })));
+      } finally {
+        await service.disposeAllAndWait();
+      }
+    },
+  );
+
   it("answers Agent runtime preference requests from the Host resolver", async () => {
     const cases: Array<{
       name: string;
@@ -2023,7 +2151,7 @@ describe("createZCodeAgentService", () => {
       expectedResolverCalls: number;
     }> = [
       {
-        name: "current-setting",
+        name: "current-setting-disabled",
         resolver: vi.fn(async () => ({
           askUserQuestionAutoResolutionEnabled: false,
           nativeSearchEnhancementsEnabled: false,
@@ -2039,9 +2167,26 @@ describe("createZCodeAgentService", () => {
         expectedResolverCalls: 1,
       },
       {
-        name: "missing-resolver",
+        name: "current-setting-enabled",
+        resolver: vi.fn(async () => ({
+          askUserQuestionAutoResolutionEnabled: true,
+          nativeSearchEnhancementsEnabled: true,
+          memoryEnabled: true,
+        })),
         expectedResult: {
           askUserQuestionAutoResolutionEnabled: true,
+          nativeSearchEnhancementsEnabled: true,
+          subagentRuntimeConfigEnabled: false,
+          memoryEnabled: true,
+          modelContextBudgetStrategy: "preflight-v1" as const,
+        },
+        expectedResolverCalls: 1,
+      },
+      {
+        name: "missing-resolver",
+        expectedResult: {
+          // 私人分发默认禁用自动继续；Host 显式设置仍由上面两个用例验证。
+          askUserQuestionAutoResolutionEnabled: false,
           nativeSearchEnhancementsEnabled: true,
           subagentRuntimeConfigEnabled: false,
           memoryEnabled: false,
@@ -2115,6 +2260,7 @@ describe("createZCodeAgentService", () => {
           expect(response?.error, testCase.name).toMatchObject({
             code: testCase.expectedErrorCode,
           });
+          expect(response?.result, testCase.name).toBeUndefined();
         }
         if (testCase.resolver) {
           expect(testCase.resolver, testCase.name).toHaveBeenCalledTimes(

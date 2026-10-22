@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+/** @deprecated 仅兼容已部署的只读查询；不进入正式方法表或扩展 task 方法族。 */
+export const LEGACY_TASK_INDEX_READ_PERSISTED_SEARCH_PAGE_METHOD =
+  "task-index/readPersistedSearchPage";
+
 /** 仅供 Host 冷历史索引使用；游标和正文均有明确上界。 */
 export const zcodeTaskIndexReadPersistedSearchPageParamsSchema = z
   .object({

@@ -2,6 +2,7 @@ import { ZCodeStorageStartupGate } from "#src/zcode-agent/zcodeStorageStartupGat
 import { Emitter } from "@zcode/rpc";
 import type { IDisposable } from "@zcode/rpc";
 import type {
+  LEGACY_TASK_INDEX_READ_PERSISTED_SEARCH_PAGE_METHOD,
   ZCodeProtocolMethod,
   ZCodeProtocolNotification,
   ZCodeProtocolRequest,
@@ -13,7 +14,10 @@ import type { z } from "zod";
 import type { ZCodeProtocolTransport } from "./zcodeProtocolTransport.js";
 
 /** 客户端可发的方法名：旧 zcodeProtocolMethods + v4/*（M3 起并存，M5 波次 2 收敛为 v4）。 */
-export type ZCodeProtocolClientMethod = ZCodeProtocolMethod | V4Method;
+export type ZCodeProtocolClientMethod =
+  | ZCodeProtocolMethod
+  | V4Method
+  | typeof LEGACY_TASK_INDEX_READ_PERSISTED_SEARCH_PAGE_METHOD;
 
 interface ZCodeProtocolClientOptions {
   requireStorageStartup?: boolean;

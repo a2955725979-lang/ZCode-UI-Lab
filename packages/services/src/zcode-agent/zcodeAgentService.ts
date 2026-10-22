@@ -1,4 +1,5 @@
 import {
+  LEGACY_TASK_INDEX_READ_PERSISTED_SEARCH_PAGE_METHOD,
   requiresRequestVerification,
   allowRequestVerificationHeaders,
   requestVerificationInteractionAvailable,
@@ -4077,16 +4078,27 @@ export function createZCodeAgentService(
       const client = await getReadOnlyClient(params, params.runtimePolicy ?? "existing-only");
       // 只读 CLI 持久库，不触发 provider 同步、session materialize 或模型回合。
       // 仅显式全文搜索会传 start-if-needed；被动索引摄入仍为 existing-only。
-      return client.request(
-        zcodeProtocolMethods.taskIndexReadPersistedSearchPage,
-        {
-          workspacePath: params.workspacePath,
-          ...(params.workspaceIdentity ? { workspaceIdentity: params.workspaceIdentity } : {}),
-          ...(params.cursor ? { cursor: params.cursor } : {}),
-          limit: params.limit,
-        },
-        zcodeTaskIndexReadPersistedSearchPageResultSchema,
-      );
+      const requestParams = {
+        workspacePath: params.workspacePath,
+        ...(params.workspaceIdentity ? { workspaceIdentity: params.workspaceIdentity } : {}),
+        ...(params.cursor ? { cursor: params.cursor } : {}),
+        limit: params.limit,
+      };
+      try {
+        return await client.request(
+          zcodeProtocolMethods.sessionReadPersistedSearchPage,
+          requestParams,
+          zcodeTaskIndexReadPersistedSearchPageResultSchema,
+        );
+      } catch (error) {
+        // 旧 CLI 的精确兼容边界：只对方法不存在回退，不能吞掉权限或 schema 错误。
+        if (!isProtocolMethodNotFoundError(error)) throw error;
+        return client.request(
+          LEGACY_TASK_INDEX_READ_PERSISTED_SEARCH_PAGE_METHOD,
+          requestParams,
+          zcodeTaskIndexReadPersistedSearchPageResultSchema,
+        );
+      }
     },
 
     async readSessionMessages(params: ZCodeAgentReadSessionMessagesParams) {

@@ -87,12 +87,43 @@ async function seed(
 async function request(server: ZCodeProtocolAgentServer, params: unknown) {
   return server.handleMessage({
     id: "search",
-    method: zcodeProtocolMethods.taskIndexReadPersistedSearchPage,
+    method: zcodeProtocolMethods.sessionReadPersistedSearchPage,
     params,
   } as ZCodeProtocolMessage);
 }
 
 describe("持久任务冷搜索页", () => {
+  it("正式 session 查询与精确旧别名共用只读 schema 和 handler", async () => {
+    const { server, store } = fixture();
+    await seed(store, "compat", "兼容正文");
+    const params = { workspacePath: WORKSPACE, limit: 1 };
+    const canonical = await server.handleMessage({
+      id: "canonical",
+      method: "session/readPersistedSearchPage",
+      params,
+    });
+    expect(canonical).toMatchObject({
+      result: { complete: true, items: [{ sessionId: "compat" }] },
+    });
+    const legacy = await server.handleMessage({
+      id: "legacy",
+      method: "task-index/readPersistedSearchPage",
+      params,
+    });
+    expect(legacy).toMatchObject({ result: (canonical as { result: unknown }).result });
+    for (const method of [
+      "session/readPersistedSearchPage",
+      "task-index/readPersistedSearchPage",
+    ]) {
+      expect(
+        await server.handleMessage({ id: "invalid", method, params: { ...params, limit: 65 } }),
+      ).toMatchObject({ error: { code: -32602 } });
+    }
+    expect(
+      await server.handleMessage({ id: "unknown", method: "task-index/create", params }),
+    ).toMatchObject({ error: { code: -32601 } });
+  });
+
   it("分页遍历 dormant 会话，严格隔离完整 workspace 身份并剥离助手建议", async () => {
     const { server, store } = fixture();
     await seed(store, "a", '回答 A\n::next-prompt{label="继续" prompt="下一步"}');

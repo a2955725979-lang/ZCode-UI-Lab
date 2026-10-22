@@ -14,6 +14,8 @@ workspace scope 不代表独立 Host 进程。UI 不直接读取 session JSON，
 
 CLI 是持久会话文本的事实源。Host 通过 `readPersistedTaskSearchPage({ workspacePath, workspaceIdentity?, cursor?, limit })` 读取一页（`limit <= 64`），响应为 `{ items: [{ sessionId, sourceRevision, searchableText }], nextCursor?, complete }`。CLI 从 cold-event-merge 的当前 active branch 提取用户可见文本，不需要运行态，也不启动模型；workspace identity 必须严格匹配。`sourceRevision` 随 active branch、rewind 或新消息改变。`complete` 只有全 workspace 枚举到尾才为真，空页不能代表完成。Host 不使用运行态 `readSession(existing-only)` 代替这个接口，因为 dormant 历史不一定有运行态。
 
+正式 wire 名称为 `session/readPersistedSearchPage`，遵守会话生命周期使用 `session/*`、不把 Host 的 task 投影引入正式协议词表的约束。为兼容已部署版本，新 CLI 只额外接收精确旧别名 `task-index/readPersistedSearchPage`，两者进入同一只读 handler 和 strict schema；旧别名不属于正式方法表，也不开放 `task-index/*` 方法族。新 Host 先请求正式名称，仅在 CLI 返回 `-32601`（method not found）时回退旧别名；参数错误、权限错误、超时和无效响应直接向上传播，不改用其它查询，不启动模型。两种名称都不支持的旧 CLI 保持搜索未就绪并报告原错误。
+
 ```text
 CLI 持久 active branch → 只读分页 → Host task-index syncer → SQLite 版本/CAS → 搜索查询
 实时快照 / Claude 导入 ────────────────────────────────┘

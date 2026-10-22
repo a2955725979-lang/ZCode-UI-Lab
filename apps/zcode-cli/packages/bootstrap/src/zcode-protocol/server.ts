@@ -3,6 +3,7 @@ import { readPersistedTaskSearchPage } from "./persisted-task-search-page.js";
 import { createNodeNetworkCapture } from "@zcode/shared/node";
 import { networkCaptureControlSchema, zcodeProtocolNotifications } from "@zcode/shared";
 import {
+  LEGACY_TASK_INDEX_READ_PERSISTED_SEARCH_PAGE_METHOD,
   zcodePluginsCancelOperationParamsSchema,
   zcodeProtocolMethods,
   zcodeWorkspaceCancelGenerateTextParamsSchema,
@@ -627,7 +628,9 @@ export class ZCodeProtocolAgentServer {
         return await resumeSession(this.context, request.params);
       case zcodeProtocolMethods.sessionList:
         return await listSessions(this.context, request.params);
-      case zcodeProtocolMethods.taskIndexReadPersistedSearchPage:
+      case zcodeProtocolMethods.sessionReadPersistedSearchPage:
+      // 旧 Host 仅兼容这一个只读别名，与正式查询复用相同校验和 handler。
+      case LEGACY_TASK_INDEX_READ_PERSISTED_SEARCH_PAGE_METHOD:
         return await readPersistedTaskSearchPage(this.context, request.params);
       case zcodeProtocolMethods.sessionSubagents:
         return await listSessionSubagents(this.context, request.params);
