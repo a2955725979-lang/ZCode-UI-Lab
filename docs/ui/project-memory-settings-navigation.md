@@ -18,7 +18,7 @@ Workspace Memory 开关
 ### Workspace Scope 与文件列表
 
 - “工作区记忆”开关卡片固定显示在 Scope 工具栏上方；它是 Memory 功能入口设置。
-- 开关卡片使用单段精简说明：“在工作区中保存并复用长期上下文，新会话生效。开启后可能增加模型调用和 Token 成本。”，不再单独重复展示成本提示段落。
+- 开关卡片使用单段说明，明确开关保存在当前应用 profile、影响新会话，长期上下文按工作区保存和复用，开启后可能增加模型调用和 Token 成本；具体边界见下文“作用范围文案”，不再单独重复展示成本提示段落。
 - catalog 加载完成后默认选择第一个 Workspace；Scope 菜单只列出有 Memory catalog 的 Workspace，不显示 User 选项。项目名称优先复用应用已打开 Workspace 与最近 Workspace 记录中的真实名称，保留原始大小写和字符。
 - Scope 菜单以 `settings.json.recentProjects` 的最近使用顺序为准；能通过项目目录名匹配的 Memory Workspace 先按该顺序排列，未匹配的历史 Memory 保留 catalog 原顺序并追加在末尾。当前打开但尚未写入 `recentProjects` 的 Workspace 仅补充名称和末尾顺序，不覆盖 settings 顺序。
 - Scope 工具栏复用 MCP 的按钮、菜单宽度、Workspace 图标和选中态，左侧依次展示 Scope、分隔线和当前 Workspace 的 Memory 数量，右侧展示文件名搜索；`文件` 分组标题右侧展示刷新入口。

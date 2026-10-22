@@ -2,11 +2,11 @@
 
 ## 目标
 
-普通 `AskUserQuestion` 默认不应无限阻塞运行中的 task。每个到达交互队首的普通问答获得一个由 CLI/runtime 管理的五分钟窗口；用户未回答时，runtime 以空答案成功收口，让模型使用最佳判断继续。侧栏只投影该权威状态，不自行决定超时。
+UI Lab 中普通 `AskUserQuestion` 默认等待用户回答。只有用户手动开启“提问自动继续”后，新注册且到达交互队首的普通问答才获得由 CLI/runtime 管理的五分钟窗口；用户未回答时，runtime 以空答案成功收口，让模型使用最佳判断继续。侧栏只投影该权威状态，不自行决定超时。
 
 普通权限请求和 `ExitPlanMode` 计划审批不参与自动结束。
 
-用户可以在设置页关闭“提问自动继续”。配置默认开启以保持升级兼容；关闭后，当前所有普通
+用户可以在设置页手动开启或关闭“提问自动继续”。配置默认关闭；关闭后，当前所有普通
 `AskUserQuestion` 和关闭期间注册的问答都永久等待用户回答。重新开启只影响开启后新注册的问题，
 不得恢复旧问题的 deadline。
 
@@ -28,7 +28,7 @@
 
 ## 用户设置
 
-- AppSettings 字段为 `askUserQuestionAutoResolutionEnabled`，默认 `true`；旧设置文件缺少该字段时按开启解析，不做迁移。
+- AppSettings 字段为 `askUserQuestionAutoResolutionEnabled`，默认 `false`；旧设置文件缺少该字段时按关闭解析，已有显式值保留，不做迁移。Host resolver 缺失或失败、CLI runtime 初始化同样按关闭处理。
 - 设置页“交互”分组使用“提问自动继续”开关。关闭动作先持久化 AppSettings，再通知所有窗口把偏好推到各自连接的 local/remote host。
 - 关闭必须立即作用于已经运行的主 Agent、后台任务、Bot 和 subagent；不能等待下一次 session 创建或只隐藏 UI 动画。
 - 关闭时，已有 `hiddenGrace` / `visibleCountdown` 转为持久化 `snoozed`；尚未成为队首的旧问答记录为不可计时，之后即使重新开启也不获得 deadline。
@@ -185,7 +185,7 @@ hiddenGrace ── 首次有效操作 ──> snoozed
 - 多 pending 串行获得完整窗口；
 - sessions-index 的后台摘要和 desktop continuous / web replayable 恢复；
 - 三种侧栏 row、双主题、中英文与桌面/手机布局；
-- 默认开启、关闭前注册、计时中关闭、关闭期间注册与重新开启不追溯；
+- 默认关闭、显式开启、关闭前注册、计时中关闭、关闭期间注册与重新开启不追溯；
 - Q09–Q14、Q23–Q25 conversation cases。
 
 明确剪枝：
